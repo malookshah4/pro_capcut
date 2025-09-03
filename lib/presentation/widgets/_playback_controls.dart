@@ -1,18 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
-import 'package:video_player/video_player.dart';
 
-/// Displays the playback controls (play/pause, time, undo/redo).
 class PlaybackControls extends StatelessWidget {
-  final VideoPlayerController? controller;
+  // FIX: This widget no longer needs its own controller.
   final EditorLoaded loadedState;
-  // --- ADDED: Callback for play/pause logic ---
   final VoidCallback onPlayPause;
 
   const PlaybackControls({
     super.key,
-    required this.controller,
     required this.loadedState,
     required this.onPlayPause,
   });
@@ -47,7 +43,7 @@ class PlaybackControls extends StatelessWidget {
               color: Colors.white,
               size: 40,
             ),
-            // --- MODIFIED: Use the passed-in callback ---
+            // FIX: Use the onPlayPause callback passed from the parent.
             onPressed: onPlayPause,
           ),
           IconButton(
@@ -60,9 +56,10 @@ class PlaybackControls extends StatelessWidget {
           const Spacer(),
           SizedBox(
             width:
-                (_formatDuration(totalDuration).length * 2 +
+                (_formatDuration(totalDuration).length +
+                    3 +
                     currentTimeString.length) *
-                4.0,
+                7.0,
           ),
         ],
       ),
@@ -70,7 +67,6 @@ class PlaybackControls extends StatelessWidget {
   }
 }
 
-/// Formats a Duration into a mm:ss string.
 String _formatDuration(Duration d) {
   final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
   final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');

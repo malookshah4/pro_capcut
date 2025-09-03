@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:bloc/bloc.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
+import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:pro_capcut/domain/models/video_clip.dart'; // --- ADDED: The crucial import ---
-import 'package:uuid/uuid.dart'; // --- ADDED: For generating unique IDs ---
+import 'package:pro_capcut/domain/models/video_clip.dart';
+import 'package:uuid/uuid.dart';
 
 part 'editor_event.dart';
 part 'editor_state.dart';
@@ -25,48 +26,92 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<VideoSeekRequsted>(_onVideoSeekRequested);
     on<ClipSplitRequested>(_onClipSplitRequested);
     on<NoiseReductionApplied>(_onNoiseReductionApplied);
+    on<ClipDeleted>(_onClipDeleted);
+    on<ExportStarted>(_onExportStarted);
+    on<ClipSpeedChanged>(_onClipSpeedChanged);
   }
 
-  final _uuid = const Uuid();
+  // --- HELPER FUNCTIONS ---
 
-  // --- MODIFIED: Now creates the first VideoClip "instruction" ---
+  String _formatFFmpegDuration(Duration d) {
+    final hours = d.inHours.toString().padLeft(2, '0');
+    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final milliseconds = d.inMilliseconds
+        .remainder(1000)
+        .toString()
+        .padLeft(3, '0');
+    return "$hours:$minutes:$seconds.$milliseconds";
+  }
+
+  void _addHistory(List<VideoClip> newClips, Emitter<EditorState> emit) {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+
+    var newTimelineHistory = List<List<VideoClip>>.from(
+      currentState.timelineHistory,
+    );
+
+    if (currentState.historyIndex < currentState.timelineHistory.length - 1) {
+      newTimelineHistory.removeRange(
+        currentState.historyIndex + 1,
+        currentState.timelineHistory.length,
+      );
+    }
+
+    newTimelineHistory.add(newClips);
+
+    // --- FIX: Recalculate the total duration from the new clip list ---
+    final newTotalDuration = newClips.fold(
+      Duration.zero,
+      (prev, clip) => prev + clip.duration,
+    );
+
+    emit(
+      currentState.copyWith(
+        timelineHistory: newTimelineHistory,
+        historyIndex: newTimelineHistory.length - 1,
+        isPlaying: false,
+        deselectClip: true,
+        // Pass the new, correct duration to the state
+        videoDuration: newTotalDuration,
+      ),
+    );
+  }
+
+  // --- EVENT HANDLERS ---
+
   Future<void> _onVideoInitialized(
     EditorVideoInitialized event,
     Emitter<EditorState> emit,
   ) async {
-    try {
-      final info = await FFprobeKit.getMediaInformation(event.videoFile.path);
-      final durationString = info.getMediaInformation()?.getDuration();
-      if (durationString == null) {
-        throw Exception("Could not get video duration.");
-      }
-      final videoDuration = Duration(
-        milliseconds: (double.parse(durationString) * 1000).round(),
-      );
+    final info = await FFprobeKit.getMediaInformation(event.videoFile.path);
+    final durationMs =
+        (double.tryParse(info.getMediaInformation()?.getDuration() ?? '0') ??
+            0) *
+        1000;
+    final initialClip = VideoClip(
+      sourcePath: event.videoFile.path,
+      startTimeInSource: Duration.zero,
+      endTimeInSource: Duration(milliseconds: durationMs.round()),
+      uniqueId: const Uuid().v4(),
+    );
 
-      final initialClip = VideoClip(
-        sourcePath: event.videoFile.path,
-        startTimeInSource: Duration.zero,
-        endTimeInSource: videoDuration,
-        uniqueId: _uuid.v4(),
-      );
+    // Also calculate the initial duration for the first state
+    final totalDuration = initialClip.duration;
 
-      emit(
-        EditorLoaded(
-          timelineHistory: [
-            [initialClip],
-          ],
-          historyIndex: 0,
-          isPlaying: false,
-        ),
-      );
-    } catch (e) {
-      // Handle error, maybe emit an error state
-      print("Error during video initialization: $e");
-    }
+    emit(
+      EditorLoaded(
+        timelineHistory: [
+          [initialClip],
+        ],
+        historyIndex: 0,
+        isPlaying: false,
+        videoDuration: totalDuration,
+      ),
+    );
   }
 
-  // --- This logic remains the same ---
   void __onVideoPositionChanged(
     VideoPositionChanged event,
     Emitter<EditorState> emit,
@@ -75,6 +120,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
       final currentState = state as EditorLoaded;
       emit(
         currentState.copyWith(
+          // Allow this event to update duration as well during playback/seeking
           videoDuration: event.duration,
           videoPosition: event.position,
         ),
@@ -82,7 +128,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     }
   }
 
-  // --- This logic remains the same ---
   void _onVideoSeekRequested(
     VideoSeekRequsted event,
     Emitter<EditorState> emit,
@@ -93,7 +138,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     }
   }
 
-  // --- This logic remains the same ---
   void _onClipTapped(ClipTapped event, Emitter<EditorState> emit) {
     if (state is EditorLoaded) {
       final currentState = state as EditorLoaded;
@@ -106,39 +150,54 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     }
   }
 
-  // --- MODIFIED: Works with the new state but logic is the same ---
   void _onUndoRequested(UndoRequested event, Emitter<EditorState> emit) {
     if (state is EditorLoaded) {
       final currentState = state as EditorLoaded;
       if (currentState.canUndo) {
+        // Recalculate duration on undo as well
+        final newClips =
+            currentState.timelineHistory[currentState.historyIndex - 1];
+        final newTotalDuration = newClips.fold(
+          Duration.zero,
+          (prev, clip) => prev + clip.duration,
+        );
+
         emit(
           currentState.copyWith(
             historyIndex: currentState.historyIndex - 1,
             isPlaying: false,
             deselectClip: true,
+            videoDuration: newTotalDuration,
           ),
         );
       }
     }
   }
 
-  // --- MODIFIED: Works with the new state but logic is the same ---
   void _onRedoRequested(RedoRequested event, Emitter<EditorState> emit) {
     if (state is EditorLoaded) {
       final currentState = state as EditorLoaded;
       if (currentState.canRedo) {
+        // Recalculate duration on redo as well
+        final newClips =
+            currentState.timelineHistory[currentState.historyIndex + 1];
+        final newTotalDuration = newClips.fold(
+          Duration.zero,
+          (prev, clip) => prev + clip.duration,
+        );
+
         emit(
           currentState.copyWith(
             historyIndex: currentState.historyIndex + 1,
             isPlaying: false,
             deselectClip: true,
+            videoDuration: newTotalDuration,
           ),
         );
       }
     }
   }
 
-  // --- MODIFIED: Works with the new state but logic is the same ---
   void _onPlaybackStatusChanged(
     PlaybackStatusChanged event,
     Emitter<EditorState> emit,
@@ -149,7 +208,16 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     }
   }
 
-  // --- REWRITTEN: The new, instantaneous split logic ---
+  void _onClipDeleted(ClipDeleted event, Emitter<EditorState> emit) {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+    if (currentState.selectedClipIndex == null) return;
+
+    final newClips = List<VideoClip>.from(currentState.currentClips);
+    newClips.removeAt(currentState.selectedClipIndex!);
+    _addHistory(newClips, emit);
+  }
+
   void _onClipSplitRequested(
     ClipSplitRequested event,
     Emitter<EditorState> emit,
@@ -157,55 +225,53 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     if (state is! EditorLoaded) return;
     final currentState = state as EditorLoaded;
 
-    try {
-      final clipToSplit = currentState.currentClips[event.clipIndex];
-
-      // Calculate the duration of all clips before the one we are splitting
-      Duration precedingDuration = Duration.zero;
-      for (int i = 0; i < event.clipIndex; i++) {
-        precedingDuration += currentState.currentClips[i].duration;
-      }
-
-      // Calculate the split point's duration relative to the start of the clip being split
-      final splitPointInClipDuration = event.splitAt - precedingDuration;
-
-      // The new timestamp inside the *source* video file where the split happens
-      final splitPointInSource =
-          clipToSplit.startTimeInSource + splitPointInClipDuration;
-
-      // Ensure we're not splitting too close to the clip's edges
-      if (splitPointInClipDuration < const Duration(milliseconds: 100) ||
-          (clipToSplit.duration - splitPointInClipDuration) <
-              const Duration(milliseconds: 100)) {
-        print("Split point too close to the edge. Ignoring.");
-        return; // Do nothing if the split is invalid
-      }
-
-      // Create the first new clip (from its start to the split point)
-      final clip1 = clipToSplit.copyWith(
-        endTimeInSource: splitPointInSource,
-        uniqueId: _uuid.v4(),
-      );
-
-      // Create the second new clip (from the split point to its end)
-      final clip2 = clipToSplit.copyWith(
-        startTimeInSource: splitPointInSource,
-        uniqueId: _uuid.v4(),
-      );
-
-      // Create the new timeline by replacing the old clip with the two new ones
-      var newClips = List<VideoClip>.from(currentState.currentClips);
-      newClips.removeAt(event.clipIndex);
-      newClips.insertAll(event.clipIndex, [clip1, clip2]);
-
-      // Add the new timeline state to our history
-      _addHistory(newClips, emit);
-    } catch (e) {
-      print("Error during split logic: $e");
+    Duration precedingDuration = Duration.zero;
+    for (int i = 0; i < event.clipIndex; i++) {
+      precedingDuration += currentState.currentClips[i].duration;
     }
+
+    final clipToSplit = currentState.currentClips[event.clipIndex];
+    final splitPointInClip = event.splitAt - precedingDuration;
+
+    if (splitPointInClip <= const Duration(milliseconds: 100) ||
+        (clipToSplit.duration - splitPointInClip) <=
+            const Duration(milliseconds: 100)) {
+      emit(currentState.copyWith());
+      return;
+    }
+
+    final splitPointInSource = clipToSplit.startTimeInSource + splitPointInClip;
+
+    final clip1 = clipToSplit.copyWith(
+      endTimeInSource: splitPointInSource,
+      uniqueId: const Uuid().v4(),
+    );
+    final clip2 = clipToSplit.copyWith(
+      startTimeInSource: splitPointInSource,
+      uniqueId: const Uuid().v4(),
+    );
+
+    final newClips = List<VideoClip>.from(currentState.currentClips);
+    newClips.removeAt(event.clipIndex);
+    newClips.insertAll(event.clipIndex, [clip1, clip2]);
+    _addHistory(newClips, emit);
   }
 
-  // --- REWRITTEN: The new hybrid model for heavy effects ---
+  void _onClipSpeedChanged(ClipSpeedChanged event, Emitter<EditorState> emit) {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+    if (currentState.selectedClipIndex == null) return;
+    final clipIndex = currentState.selectedClipIndex!;
+
+    final clipToChange = currentState.currentClips[clipIndex];
+
+    final newClip = clipToChange.copyWith(speed: event.newSpeed);
+
+    final newClips = List<VideoClip>.from(currentState.currentClips);
+    newClips[clipIndex] = newClip;
+    _addHistory(newClips, emit);
+  }
+
   Future<void> _onStabilizationStarted(
     StabilizationStarted event,
     Emitter<EditorState> emit,
@@ -237,7 +303,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
       final Directory appDirectory = await getApplicationDocumentsDirectory();
       final String transformFilePath = '${appDirectory.path}/transforms.trf';
       final String outputPath =
-          '${appDirectory.path}/stabilized_${_uuid.v4()}.mp4';
+          '${appDirectory.path}/stabilized_${const Uuid().v4()}.mp4';
 
       final startTime = _formatFFmpegDuration(clipToProcess.startTimeInSource);
       final endTime = _formatFFmpegDuration(clipToProcess.endTimeInSource);
@@ -276,7 +342,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         processedPath: outputPath,
         startTimeInSource: Duration.zero,
         endTimeInSource: newDuration,
-        uniqueId: _uuid.v4(),
+        uniqueId: const Uuid().v4(),
       );
 
       var newClips = List<VideoClip>.from(currentState.currentClips);
@@ -290,8 +356,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     }
   }
 
-  // Omitted _onNoiseReductionApplied for brevity, but it would follow the exact same pattern
-  // as _onStabilizationStarted: trim from source, apply filter, create new clip, update history.
   Future<void> _onNoiseReductionApplied(
     NoiseReductionApplied event,
     Emitter<EditorState> emit,
@@ -306,43 +370,117 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     // Implement using the same hybrid model as _onStabilizationStarted
   }
 
-  // --- MODIFIED: The history now works with VideoClip objects ---
-  void _addHistory(List<VideoClip> newClips, Emitter<EditorState> emit) {
+  Future<void> _onExportStarted(
+    ExportStarted event,
+    Emitter<EditorState> emit,
+  ) async {
     if (state is! EditorLoaded) return;
     final currentState = state as EditorLoaded;
+    if (currentState.currentClips.isEmpty) return;
 
-    var newTimelineHistory = List<List<VideoClip>>.from(
-      currentState.timelineHistory,
+    final totalDuration = currentState.currentClips.fold(
+      Duration.zero,
+      (prev, clip) => prev + clip.duration,
     );
-
-    if (currentState.historyIndex < currentState.timelineHistory.length - 1) {
-      newTimelineHistory.removeRange(
-        currentState.historyIndex + 1,
-        currentState.timelineHistory.length,
-      );
-    }
-
-    newTimelineHistory.add(newClips);
 
     emit(
-      currentState.copyWith(
-        timelineHistory: newTimelineHistory,
-        historyIndex: newTimelineHistory.length - 1,
+      EditorProcessing(
+        timelineHistory: currentState.timelineHistory,
+        historyIndex: currentState.historyIndex,
         isPlaying: false,
-        deselectClip: true,
+        progress: 0.0,
+        type: ProcessingType.export,
       ),
     );
-  }
 
-  // --- HELPER: Stays the same, but is now used by the effects handlers ---
-  String _formatFFmpegDuration(Duration d) {
-    final hours = d.inHours.toString().padLeft(2, '0');
-    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    final milliseconds = d.inMilliseconds
-        .remainder(1000)
-        .toString()
-        .padLeft(3, '0');
-    return "$hours:$minutes:$seconds.$milliseconds";
+    final completer = Completer<void>();
+    final Directory appDirectory = await getApplicationDocumentsDirectory();
+    final String outputPath =
+        '${appDirectory.path}/exported_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+    // --- This complex FFmpeg command generation remains the same ---
+    final inputs = <String>[];
+    final filterComplex = StringBuffer();
+    final concatStreams = StringBuffer();
+    final uniquePaths = <String>{};
+    final pathMap = <String, int>{};
+
+    for (var clip in currentState.currentClips) {
+      if (!uniquePaths.contains(clip.playablePath)) {
+        pathMap[clip.playablePath] = uniquePaths.length;
+        uniquePaths.add(clip.playablePath);
+      }
+    }
+    inputs.addAll(uniquePaths.map((path) => '-i "$path"'));
+
+    for (int i = 0; i < currentState.currentClips.length; i++) {
+      final clip = currentState.currentClips[i];
+      final inputIndex = pathMap[clip.playablePath]!;
+
+      filterComplex.write(
+        '[$inputIndex:v]trim=start=${clip.startTimeInSource.inSeconds}.${clip.startTimeInSource.inMilliseconds.remainder(1000)}:end=${clip.endTimeInSource.inSeconds}.${clip.endTimeInSource.inMilliseconds.remainder(1000)},setpts=PTS-STARTPTS[v$i];',
+      );
+      filterComplex.write(
+        '[$inputIndex:a]atrim=start=${clip.startTimeInSource.inSeconds}.${clip.startTimeInSource.inMilliseconds.remainder(1000)}:end=${clip.endTimeInSource.inSeconds}.${clip.endTimeInSource.inMilliseconds.remainder(1000)},asetpts=PTS-STARTPTS[a$i];',
+      );
+
+      concatStreams.write('[v$i][a$i]');
+    }
+
+    filterComplex.write(
+      '${concatStreams}concat=n=${currentState.currentClips.length}:v=1:a=1[outv][outa]',
+    );
+
+    final command =
+        '${inputs.join(' ')} -filter_complex "${filterComplex.toString()}" -map "[outv]" -map "[outa]" -c:v libx264 -preset medium -c:a aac "$outputPath"';
+
+    FFmpegKit.executeAsync(
+      command,
+      (session) async {
+        final returnCode = await session.getReturnCode();
+        if (ReturnCode.isSuccess(returnCode)) {
+          print("Export SUCCESSFUL! Video temporarily saved at: $outputPath");
+
+          // --- NEW: Logic to save the video to the device's gallery ---
+          try {
+            // The package handles requesting permission if it hasn't been granted.
+            final hasPermissions = await Gal.hasAccess();
+            if (!hasPermissions) {
+              await Gal.requestAccess();
+            }
+            // Save the video to a specific album named 'FreeCut' for a professional feel.
+            await Gal.putVideo(outputPath, album: 'FreeCut');
+            print("Video successfully saved to Gallery in 'FreeCut' album!");
+          } catch (e) {
+            print("Error saving video to gallery: $e");
+          }
+        } else {
+          print(
+            "Export FAILED. FFmpeg logs: ${await session.getLogsAsString()}",
+          );
+        }
+
+        // Return to the loaded state whether the export/save succeeds or fails
+        emit(currentState.copyWith());
+        completer.complete();
+      },
+      null, // Log callback
+      (statistics) {
+        final progress = statistics.getTime() / totalDuration.inMilliseconds;
+        if (!isClosed) {
+          emit(
+            EditorProcessing(
+              timelineHistory: currentState.timelineHistory,
+              historyIndex: currentState.historyIndex,
+              isPlaying: false,
+              progress: progress.clamp(0.0, 1.0),
+              type: ProcessingType.export,
+            ),
+          );
+        }
+      },
+    );
+
+    return completer.future;
   }
 }

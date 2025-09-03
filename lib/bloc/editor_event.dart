@@ -59,3 +59,15 @@ class ClipSplitRequested extends EditorEvent {
   @override
   List<Object> get props => [clipIndex, splitAt];
 }
+
+class ClipDeleted extends EditorEvent {}
+
+class ExportStarted extends EditorEvent {}
+
+class ClipSpeedChanged extends EditorEvent {
+  final double newSpeed;
+  const ClipSpeedChanged(this.newSpeed);
+
+  @override
+  List<Object> get props => [newSpeed];
+}

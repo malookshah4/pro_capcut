@@ -6,6 +6,7 @@ class VideoClip extends Equatable {
   final Duration startTimeInSource;
   final Duration endTimeInSource;
   final String uniqueId;
+  final double speed;
 
   const VideoClip({
     required this.sourcePath,
@@ -13,6 +14,7 @@ class VideoClip extends Equatable {
     required this.startTimeInSource,
     required this.endTimeInSource,
     required this.uniqueId,
+    this.speed = 1.0,
   });
 
   /// The actual file path that should be used for playback or processing.
@@ -21,13 +23,17 @@ class VideoClip extends Equatable {
 
   /// The duration of this specific clip segment.
   Duration get duration {
-    // If a clip has been processed (e.g., stabilized), its start/end times
-    // are relative to the new processed file itself.
+    // If the clip has been processed (e.g., for speed), its start/end times
+    // are relative to the new file, so we don't divide by speed again.
     if (processedPath != null) {
-      return endTimeInSource;
+      return endTimeInSource - startTimeInSource;
     }
-    // Otherwise, it's a slice of the original source file.
-    return endTimeInSource - startTimeInSource;
+    // For a virtual clip from the original source, calculate its new duration.
+    final originalDuration = endTimeInSource - startTimeInSource;
+    if (speed <= 0) return originalDuration; // Avoid division by zero
+    return Duration(
+      microseconds: (originalDuration.inMicroseconds / speed).round(),
+    );
   }
 
   /// Creates a copy of this VideoClip but with the given fields replaced with the new values.
@@ -37,6 +43,7 @@ class VideoClip extends Equatable {
     Duration? startTimeInSource,
     Duration? endTimeInSource,
     String? uniqueId,
+    double? speed,
   }) {
     return VideoClip(
       sourcePath: sourcePath ?? this.sourcePath,
@@ -44,6 +51,7 @@ class VideoClip extends Equatable {
       startTimeInSource: startTimeInSource ?? this.startTimeInSource,
       endTimeInSource: endTimeInSource ?? this.endTimeInSource,
       uniqueId: uniqueId ?? this.uniqueId,
+      speed: speed ?? this.speed,
     );
   }
 
@@ -54,5 +62,6 @@ class VideoClip extends Equatable {
     startTimeInSource,
     endTimeInSource,
     uniqueId,
+    speed,
   ];
 }

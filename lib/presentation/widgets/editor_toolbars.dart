@@ -3,6 +3,7 @@ import 'package:eva_icons_flutter/eva_icons_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
+import 'package:pro_capcut/presentation/widgets/speed_control_sheet.dart';
 
 enum EditorToolbar { main, audio, edit }
 
@@ -94,7 +95,35 @@ class EditToolbar extends StatelessWidget {
                   _buildToolbarItem(
                     icon: Icons.speed,
                     label: 'Speed',
-                    onTap: () {},
+                    onTap: () {
+                      final editorBloc = context.read<EditorBloc>();
+                      final currentState = editorBloc.state;
+                      if (currentState is EditorLoaded &&
+                          currentState.selectedClipIndex != null) {
+                        final selectedClip = currentState
+                            .currentClips[currentState.selectedClipIndex!];
+
+                        // This is the logic to show the bottom sheet
+                        showModalBottomSheet<double>(
+                          context: context,
+                          backgroundColor: Colors.transparent,
+                          builder: (ctx) => SpeedControlSheet(
+                            initialSpeed: selectedClip.speed,
+                            // Pass the original duration before speed adjustment
+                            originalDuration: Duration(
+                              microseconds:
+                                  (selectedClip.duration.inMicroseconds *
+                                          selectedClip.speed)
+                                      .round(),
+                            ),
+                          ),
+                        ).then((newSpeed) {
+                          if (newSpeed != null) {
+                            editorBloc.add(ClipSpeedChanged(newSpeed));
+                          }
+                        });
+                      }
+                    },
                   ),
                   _buildToolbarItem(
                     icon: Icons.volume_up_outlined,
@@ -109,7 +138,9 @@ class EditToolbar extends StatelessWidget {
                   _buildToolbarItem(
                     icon: Icons.delete_outline,
                     label: 'Delete',
-                    onTap: () {},
+                    onTap: () {
+                      context.read<EditorBloc>().add(ClipDeleted());
+                    },
                   ),
                 ],
               ),

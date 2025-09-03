@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -32,197 +33,212 @@ class EditorView extends StatefulWidget {
 }
 
 class _EditorViewState extends State<EditorView> {
-  // --- REWRITTEN: Controller management for the virtual timeline ---
+  Map<String, VideoPlayerController> _controllers = {};
   VideoPlayerController? _activeController;
-  final Map<String, VideoPlayerController> _controllers = {};
   int _currentClipIndex = 0;
-  List<VideoClip> _currentClips = [];
-  Duration _totalTimelineDuration = Duration.zero;
-  bool _isSeeking = false;
+  StreamSubscription<Duration?>? _positionSubscription;
 
   EditorToolbar _currentToolbar = EditorToolbar.main;
   int _selectedToolIndex = 0;
-  final ScrollController _timelineScrollController = ScrollController();
   bool _wasPlayingBeforeDrag = false;
 
   @override
   void dispose() {
-    // Dispose all created controllers
+    _positionSubscription?.cancel();
     for (var controller in _controllers.values) {
-      controller.removeListener(_playbackListener);
       controller.dispose();
     }
-    _timelineScrollController.dispose();
+    _controllers.clear();
     super.dispose();
   }
 
-  // --- NEW: Initializes or updates controllers based on the virtual timeline ---
-  Future<void> _initializeControllers(List<VideoClip> clips) async {
-    _currentClips = clips;
-    _totalTimelineDuration = clips.fold(
-      Duration.zero,
-      (prev, clip) => prev + clip.duration,
-    );
+  Future<void> _updateControllers(List<VideoClip> clips) async {
+    if (!mounted) return;
 
-    // Find all unique video paths from the timeline instructions
     final uniquePaths = clips.map((c) => c.playablePath).toSet();
+    final newControllers = <String, VideoPlayerController>{};
+    final oldControllers = Map.of(_controllers);
 
-    // Dispose controllers that are no longer needed
-    final pathsToRemove = _controllers.keys.where(
-      (p) => !uniquePaths.contains(p),
-    );
-    for (var path in pathsToRemove) {
-      _controllers[path]?.dispose();
-      _controllers.remove(path);
-    }
-
-    // Create and initialize controllers for new video paths
-    for (var path in uniquePaths) {
-      if (!_controllers.containsKey(path)) {
-        final newController = VideoPlayerController.file(File(path));
-        _controllers[path] = newController;
-        await newController.initialize();
-        newController.setLooping(false); // We handle looping manually
+    for (final path in uniquePaths) {
+      if (oldControllers.containsKey(path)) {
+        newControllers[path] = oldControllers.remove(path)!;
+      } else {
+        final controller = VideoPlayerController.file(File(path));
+        try {
+          await controller.initialize();
+          newControllers[path] = controller;
+        } catch (e) {
+          print("Error initializing controller for $path: $e");
+          controller.dispose();
+        }
       }
     }
 
-    // Set the initial active controller
-    if (clips.isNotEmpty) {
-      _activeController = _controllers[clips.first.playablePath];
-      // Seek to the start of the first clip's segment
-      await _activeController?.seekTo(clips.first.startTimeInSource);
-      setState(() {});
+    for (final oldController in oldControllers.values) {
+      oldController.dispose();
     }
 
-    // Add listener to the active controller
-    _activeController?.removeListener(_playbackListener);
-    _activeController?.addListener(_playbackListener);
-
-    // Update the total duration in the BLoC
-    context.read<EditorBloc>().add(
-      VideoPositionChanged(
-        Duration.zero, // Start at the beginning
-        _totalTimelineDuration,
-      ),
-    );
+    if (mounted) {
+      setState(() {
+        _controllers = newControllers;
+      });
+      _setActiveClip(0, clips, seekToStart: true);
+    }
   }
 
-  // --- NEW: The core playback logic for the virtual timeline ---
-  void _playbackListener() {
-    if (_activeController == null ||
-        !_activeController!.value.isInitialized ||
-        _currentClips.isEmpty ||
-        _isSeeking) {
+  void _setActiveClip(
+    int index,
+    List<VideoClip> clips, {
+    bool seekToStart = false,
+  }) {
+    if (!mounted || index >= clips.length || clips.isEmpty) {
+      if (_activeController != null) {
+        setState(() => _activeController = null);
+      }
       return;
     }
 
-    final editorBloc = context.read<EditorBloc>();
-    final currentClip = _currentClips[_currentClipIndex];
-    final positionInSource = _activeController!.value.position;
+    final clip = clips[index];
+    final controller = _controllers[clip.playablePath];
 
-    // Check if playback has passed the end of the current virtual clip
-    if (positionInSource >= currentClip.endTimeInSource) {
-      final nextClipIndex = _currentClipIndex + 1;
+    if (controller != null) {
+      controller.setPlaybackSpeed(clip.speed);
+    }
 
-      if (nextClipIndex < _currentClips.length) {
-        // --- Transition to the next clip ---
-        _currentClipIndex = nextClipIndex;
-        final nextClip = _currentClips[nextClipIndex];
+    if (controller != _activeController) {
+      setState(() {
+        _activeController = controller;
+      });
+    }
 
-        // Switch the active controller if the next clip uses a different file
-        if (_activeController != _controllers[nextClip.playablePath]) {
-          _activeController?.removeListener(_playbackListener);
-          setState(() {
-            _activeController = _controllers[nextClip.playablePath];
-          });
-          _activeController?.addListener(_playbackListener);
-        }
-
-        _activeController?.seekTo(nextClip.startTimeInSource);
-        if (editorBloc.state is EditorLoaded &&
-            (editorBloc.state as EditorLoaded).isPlaying) {
-          _activeController?.play();
-        }
-      } else {
-        // --- End of timeline ---
-        _activeController?.pause();
-        _activeController?.seekTo(
-          currentClip.endTimeInSource,
-        ); // Park at the very end
-        editorBloc.add(const PlaybackStatusChanged(false));
+    if (seekToStart && _activeController != null) {
+      _activeController!.seekTo(clip.startTimeInSource);
+      Duration globalPosition = Duration.zero;
+      for (int i = 0; i < index; i++) {
+        globalPosition += clips[i].duration;
       }
+      final totalDuration = clips.fold(
+        Duration.zero,
+        (prev, clip) => prev + clip.duration,
+      );
+      context.read<EditorBloc>().add(
+        VideoPositionChanged(globalPosition, totalDuration),
+      );
     }
 
-    // Update global timeline position in BLoC state
-    Duration precedingDuration = Duration.zero;
-    for (int i = 0; i < _currentClipIndex; i++) {
-      precedingDuration += _currentClips[i].duration;
-    }
-    final positionInClip = positionInSource - currentClip.startTimeInSource;
-    final globalPosition = precedingDuration + positionInClip;
-
-    editorBloc.add(
-      VideoPositionChanged(globalPosition, _totalTimelineDuration),
-    );
+    _currentClipIndex = index;
   }
 
-  // --- NEW: Handles seek requests from the BLoC ---
-  Future<void> _handleSeek(Duration globalPosition) async {
-    if (_isSeeking) return;
-    setState(() => _isSeeking = true);
+  void _play() {
+    final editorState = context.read<EditorBloc>().state;
+    if (editorState is! EditorLoaded || _activeController == null) return;
 
-    Duration precedingDuration = Duration.zero;
-    for (int i = 0; i < _currentClips.length; i++) {
-      final clip = _currentClips[i];
-      final clipEnd = precedingDuration + clip.duration;
+    final clips = editorState.currentClips;
+    if (_currentClipIndex >= clips.length) return;
 
-      if (globalPosition <= clipEnd) {
-        final positionInClip = globalPosition - precedingDuration;
-        final seekInSource = clip.startTimeInSource + positionInClip;
+    final activeClip = clips[_currentClipIndex];
+    _activeController!.setPlaybackSpeed(activeClip.speed);
+    _activeController!.play();
 
-        if (_currentClipIndex != i ||
-            _activeController != _controllers[clip.playablePath]) {
-          _activeController?.removeListener(_playbackListener);
-          setState(() {
-            _currentClipIndex = i;
-            _activeController = _controllers[clip.playablePath];
-          });
-          _activeController?.addListener(_playbackListener);
-        }
+    context.read<EditorBloc>().add(const PlaybackStatusChanged(true));
 
-        await _activeController?.seekTo(seekInSource);
-        break;
+    _positionSubscription?.cancel();
+    _positionSubscription = _activeController!.position.asStream().listen((
+      position,
+    ) {
+      if (!mounted || position == null) return;
+
+      final currentState = context.read<EditorBloc>().state as EditorLoaded;
+      final currentClips = currentState.currentClips;
+      if (_currentClipIndex >= currentClips.length) return;
+      final activeClip = currentClips[_currentClipIndex];
+
+      Duration globalPosition = Duration.zero;
+      for (int i = 0; i < _currentClipIndex; i++) {
+        globalPosition += currentClips[i].duration;
       }
-      precedingDuration = clipEnd;
+      globalPosition += (position - activeClip.startTimeInSource);
+      context.read<EditorBloc>().add(
+        VideoPositionChanged(globalPosition, currentState.videoDuration),
+      );
+
+      if (position >= activeClip.endTimeInSource) {
+        final nextClipIndex = _currentClipIndex + 1;
+        if (nextClipIndex < currentClips.length) {
+          _setActiveClip(nextClipIndex, currentClips, seekToStart: true);
+          _play();
+        } else {
+          _pause();
+          _setActiveClip(0, currentClips, seekToStart: true);
+        }
+      }
+    });
+  }
+
+  void _pause() {
+    _activeController?.pause();
+    _positionSubscription?.cancel();
+    context.read<EditorBloc>().add(const PlaybackStatusChanged(false));
+  }
+
+  void _onPlayPause() {
+    if (_activeController?.value.isPlaying ?? false) {
+      _pause();
+    } else {
+      _play();
+    }
+  }
+
+  void _onDragUpdate(Duration newPosition) {
+    final editorState = context.read<EditorBloc>().state;
+    if (editorState is! EditorLoaded) return;
+    final clips = editorState.currentClips;
+
+    Duration cumulativeDuration = Duration.zero;
+    for (int i = 0; i < clips.length; i++) {
+      final clip = clips[i];
+      if (newPosition >= cumulativeDuration &&
+          newPosition <= cumulativeDuration + clip.duration) {
+        if (_currentClipIndex != i) {
+          _setActiveClip(i, clips);
+        }
+        // Account for speed when calculating the seek position in the source file
+        final timeIntoClip =
+            (newPosition - cumulativeDuration).inMilliseconds * clip.speed;
+        final seekPos =
+            clip.startTimeInSource +
+            Duration(milliseconds: timeIntoClip.round());
+
+        _activeController?.seekTo(seekPos);
+        context.read<EditorBloc>().add(
+          VideoPositionChanged(newPosition, editorState.videoDuration),
+        );
+        return;
+      }
+      cumulativeDuration += clip.duration;
     }
 
-    setState(() => _isSeeking = false);
+    if (clips.isNotEmpty) {
+      final lastClip = clips.last;
+      _setActiveClip(clips.length - 1, clips);
+      _activeController?.seekTo(lastClip.endTimeInSource);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<EditorBloc, EditorState>(
-      // --- Listen for state changes to trigger UI updates ---
-      listenWhen: (prev, curr) {
-        if (prev is! EditorLoaded || curr is! EditorLoaded) return true;
-        // Re-initialize controllers ONLY when the timeline structure changes
-        return !listEquals(prev.currentClips, curr.currentClips) ||
-            prev.videoPosition != curr.videoPosition;
-      },
       listener: (context, state) {
         if (state is EditorLoaded) {
-          // Initialize controllers when the clips change
-          if (!listEquals(_currentClips, state.currentClips)) {
-            _initializeControllers(state.currentClips);
+          final currentPaths = state.currentClips
+              .map((c) => c.playablePath)
+              .toSet();
+          final knownPaths = _controllers.keys.toSet();
+
+          if (!setEquals(currentPaths, knownPaths)) {
+            _updateControllers(state.currentClips);
           }
 
-          // Handle seek requests from the BLoC
-          if (state.videoPosition != _activeController?.value.position &&
-              !_isSeeking) {
-            _handleSeek(state.videoPosition);
-          }
-
-          // Toolbar logic remains the same
           if (state.selectedClipIndex != null &&
               _currentToolbar != EditorToolbar.edit) {
             setState(() => _currentToolbar = EditorToolbar.edit);
@@ -240,105 +256,88 @@ class _EditorViewState extends State<EditorView> {
           );
         }
 
-        return AnnotatedRegion<SystemUiOverlayStyle>(
-          value: const SystemUiOverlayStyle(
-            systemNavigationBarColor: Color.fromARGB(255, 22, 22, 22),
-            systemNavigationBarIconBrightness: Brightness.light,
-          ),
-          child: Scaffold(
+        return Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            title: const Text('Editor'),
             backgroundColor: Colors.black,
-            appBar: AppBar(
-              title: const Text('Editor'),
-              backgroundColor: Colors.black,
-              elevation: 0,
-              leading: const BackButton(color: Colors.white),
-              actions: [
-                TextButton(
-                  onPressed: () {},
-                  child: const Text(
-                    'Export',
-                    style: TextStyle(color: Colors.blueAccent, fontSize: 16),
-                  ),
+            elevation: 0,
+            leading: const BackButton(color: Colors.white),
+            actions: [
+              TextButton(
+                onPressed: () =>
+                    context.read<EditorBloc>().add(ExportStarted()),
+                child: const Text(
+                  'Export',
+                  style: TextStyle(color: Colors.blueAccent, fontSize: 16),
                 ),
-              ],
-            ),
-            body: Stack(
-              children: [
-                Column(
-                  children: [
-                    VideoViewport(controller: _activeController),
-                    PlaybackControls(
-                      // --- MODIFIED: Pass active controller and handle play/pause ---
-                      controller: _activeController,
+              ),
+            ],
+          ),
+          body: Stack(
+            children: [
+              Column(
+                children: [
+                  VideoViewport(controller: _activeController),
+                  PlaybackControls(
+                    loadedState: state,
+                    onPlayPause: _onPlayPause,
+                  ),
+                  Expanded(
+                    child: TimelineArea(
                       loadedState: state,
-                      onPlayPause: () {
-                        final isPlaying =
-                            _activeController?.value.isPlaying ?? false;
-                        if (isPlaying) {
-                          _activeController?.pause();
-                        } else {
-                          _activeController?.play();
-                        }
-                        context.read<EditorBloc>().add(
-                          PlaybackStatusChanged(!isPlaying),
-                        );
-                      },
-                    ),
-                    TimelineArea(
-                      controller: _activeController,
-                      loadedState: state,
-                      timelineScrollController: _timelineScrollController,
                       onDragStart: () {
                         _wasPlayingBeforeDrag =
                             _activeController?.value.isPlaying ?? false;
-                        if (_wasPlayingBeforeDrag) {
-                          _activeController?.pause();
-                        }
+                        if (_wasPlayingBeforeDrag) _pause();
                       },
                       onDragEnd: () {
-                        if (_wasPlayingBeforeDrag) {
-                          _activeController?.play();
-                        }
+                        if (_wasPlayingBeforeDrag) _play();
                       },
+                      onDragUpdate: _onDragUpdate,
                     ),
-                  ],
-                ),
-                if (state is EditorProcessing)
-                  ProcessingOverlay(processingState: state),
-              ],
-            ),
-            bottomNavigationBar: Builder(
-              builder: (context) {
-                switch (_currentToolbar) {
-                  case EditorToolbar.main:
-                    return MainToolbar(
-                      currentIndex: _selectedToolIndex,
-                      onTap: (index) {
-                        setState(() => _selectedToolIndex = index);
-                        if (index == 1) {
-                          setState(() => _currentToolbar = EditorToolbar.audio);
-                        } else if (index == 0) {
-                          if (state.selectedClipIndex == null) {
-                            context.read<EditorBloc>().add(const ClipTapped(0));
-                          }
-                          setState(() => _currentToolbar = EditorToolbar.edit);
-                        } else if (index == 3) {
-                          context.read<EditorBloc>().add(
-                            StabilizationStarted(),
-                          );
+                  ),
+                ],
+              ),
+              if (state is EditorProcessing)
+                ProcessingOverlay(processingState: state),
+            ],
+          ),
+          bottomNavigationBar: Builder(
+            builder: (context) {
+              switch (_currentToolbar) {
+                case EditorToolbar.main:
+                  return MainToolbar(
+                    currentIndex: _selectedToolIndex,
+                    onTap: (index) {
+                      setState(() {
+                        _selectedToolIndex = index;
+                      });
+                      if (index == 0) {
+                        // Edit
+                        setState(() => _currentToolbar = EditorToolbar.edit);
+                        if (state.selectedClipIndex == null &&
+                            state.currentClips.isNotEmpty) {
+                          context.read<EditorBloc>().add(const ClipTapped(0));
                         }
-                      },
-                    );
-                  case EditorToolbar.audio:
-                    return AudioToolbar(
-                      onBack: () =>
-                          setState(() => _currentToolbar = EditorToolbar.main),
-                    );
-                  case EditorToolbar.edit:
-                    return const EditToolbar();
-                }
-              },
-            ),
+                      } else if (index == 1) {
+                        // Audio
+                        setState(() => _currentToolbar = EditorToolbar.audio);
+                      } else if (index == 3) {
+                        // Stabilize
+                        context.read<EditorBloc>().add(StabilizationStarted());
+                      }
+                    },
+                  );
+                case EditorToolbar.audio:
+                  return AudioToolbar(
+                    onBack: () =>
+                        setState(() => _currentToolbar = EditorToolbar.main),
+                  );
+                case EditorToolbar.edit:
+                  return const EditToolbar();
+              }
+            },
           ),
         );
       },

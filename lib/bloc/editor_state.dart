@@ -1,6 +1,13 @@
 part of 'editor_bloc.dart'; // --- This is now the only directive in the file ---
 
-enum ProcessingType { stabilization, aiEnhance, noiseReduction, split }
+enum ProcessingType {
+  stabilization,
+  aiEnhance,
+  noiseReduction,
+  split,
+  export,
+  speed,
+}
 
 abstract class EditorState extends Equatable {
   const EditorState();
