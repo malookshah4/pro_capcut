@@ -41,6 +41,7 @@ class _EditorViewState extends State<EditorView> {
   EditorToolbar _currentToolbar = EditorToolbar.main;
   int _selectedToolIndex = 0;
   bool _wasPlayingBeforeDrag = false;
+  List<VideoClip> _lastKnownClips = [];
 
   @override
   void dispose() {
@@ -82,7 +83,9 @@ class _EditorViewState extends State<EditorView> {
       setState(() {
         _controllers = newControllers;
       });
-      _setActiveClip(0, clips, seekToStart: true);
+      final currentPosition =
+          (context.read<EditorBloc>().state as EditorLoaded).videoPosition;
+      _updateActiveClipForPosition(currentPosition, clips, seek: true);
     }
   }
 
@@ -157,7 +160,9 @@ class _EditorViewState extends State<EditorView> {
       for (int i = 0; i < _currentClipIndex; i++) {
         globalPosition += currentClips[i].duration;
       }
-      globalPosition += (position - activeClip.startTimeInSource);
+      globalPosition +=
+          ((position - activeClip.startTimeInSource) * (1 / activeClip.speed));
+
       context.read<EditorBloc>().add(
         VideoPositionChanged(globalPosition, currentState.videoDuration),
       );
@@ -189,40 +194,44 @@ class _EditorViewState extends State<EditorView> {
     }
   }
 
-  void _onDragUpdate(Duration newPosition) {
+  void _onTimelineScrolled(Duration newPosition) {
     final editorState = context.read<EditorBloc>().state;
     if (editorState is! EditorLoaded) return;
     final clips = editorState.currentClips;
 
+    context.read<EditorBloc>().add(
+      VideoPositionChanged(newPosition, editorState.videoDuration),
+    );
+
+    _updateActiveClipForPosition(newPosition, clips, seek: true);
+  }
+
+  void _updateActiveClipForPosition(
+    Duration globalPosition,
+    List<VideoClip> clips, {
+    bool seek = false,
+  }) {
+    if (clips.isEmpty) return;
     Duration cumulativeDuration = Duration.zero;
     for (int i = 0; i < clips.length; i++) {
       final clip = clips[i];
-      if (newPosition >= cumulativeDuration &&
-          newPosition <= cumulativeDuration + clip.duration) {
-        if (_currentClipIndex != i) {
+      final clipEnd = cumulativeDuration + clip.duration;
+      if (globalPosition >= cumulativeDuration && globalPosition < clipEnd) {
+        if (_currentClipIndex != i || _activeController == null) {
           _setActiveClip(i, clips);
         }
-        // Account for speed when calculating the seek position in the source file
-        final timeIntoClip =
-            (newPosition - cumulativeDuration).inMilliseconds * clip.speed;
-        final seekPos =
-            clip.startTimeInSource +
-            Duration(milliseconds: timeIntoClip.round());
-
-        _activeController?.seekTo(seekPos);
-        context.read<EditorBloc>().add(
-          VideoPositionChanged(newPosition, editorState.videoDuration),
-        );
+        if (seek && _activeController != null) {
+          final timeIntoClip = globalPosition - cumulativeDuration;
+          final seekPosInSource =
+              clip.startTimeInSource + (timeIntoClip * clip.speed);
+          _activeController!.seekTo(seekPosInSource);
+        }
         return;
       }
-      cumulativeDuration += clip.duration;
+      cumulativeDuration = clipEnd;
     }
-
-    if (clips.isNotEmpty) {
-      final lastClip = clips.last;
-      _setActiveClip(clips.length - 1, clips);
-      _activeController?.seekTo(lastClip.endTimeInSource);
-    }
+    _setActiveClip(clips.length - 1, clips, seekToStart: false);
+    _activeController?.seekTo(clips.last.endTimeInSource);
   }
 
   @override
@@ -230,12 +239,8 @@ class _EditorViewState extends State<EditorView> {
     return BlocConsumer<EditorBloc, EditorState>(
       listener: (context, state) {
         if (state is EditorLoaded) {
-          final currentPaths = state.currentClips
-              .map((c) => c.playablePath)
-              .toSet();
-          final knownPaths = _controllers.keys.toSet();
-
-          if (!setEquals(currentPaths, knownPaths)) {
+          if (!listEquals(_lastKnownClips, state.currentClips)) {
+            _lastKnownClips = List.from(state.currentClips);
             _updateControllers(state.currentClips);
           }
 
@@ -283,19 +288,18 @@ class _EditorViewState extends State<EditorView> {
                     loadedState: state,
                     onPlayPause: _onPlayPause,
                   ),
-                  Expanded(
-                    child: TimelineArea(
-                      loadedState: state,
-                      onDragStart: () {
-                        _wasPlayingBeforeDrag =
-                            _activeController?.value.isPlaying ?? false;
-                        if (_wasPlayingBeforeDrag) _pause();
-                      },
-                      onDragEnd: () {
-                        if (_wasPlayingBeforeDrag) _play();
-                      },
-                      onDragUpdate: _onDragUpdate,
-                    ),
+                  // This is the call that was causing errors
+                  TimelineArea(
+                    loadedState: state,
+                    onScroll: _onTimelineScrolled,
+                    onDragStart: () {
+                      _wasPlayingBeforeDrag =
+                          _activeController?.value.isPlaying ?? false;
+                      if (_wasPlayingBeforeDrag) _pause();
+                    },
+                    onDragEnd: () {
+                      if (_wasPlayingBeforeDrag) _play();
+                    },
                   ),
                 ],
               ),
@@ -314,17 +318,14 @@ class _EditorViewState extends State<EditorView> {
                         _selectedToolIndex = index;
                       });
                       if (index == 0) {
-                        // Edit
                         setState(() => _currentToolbar = EditorToolbar.edit);
                         if (state.selectedClipIndex == null &&
                             state.currentClips.isNotEmpty) {
                           context.read<EditorBloc>().add(const ClipTapped(0));
                         }
                       } else if (index == 1) {
-                        // Audio
                         setState(() => _currentToolbar = EditorToolbar.audio);
                       } else if (index == 3) {
-                        // Stabilize
                         context.read<EditorBloc>().add(StabilizationStarted());
                       }
                     },

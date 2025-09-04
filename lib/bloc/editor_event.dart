@@ -71,3 +71,8 @@ class ClipSpeedChanged extends EditorEvent {
   @override
   List<Object> get props => [newSpeed];
 }
+
+class ClipAdded extends EditorEvent {
+  final File videoFile;
+  const ClipAdded(this.videoFile);
+}

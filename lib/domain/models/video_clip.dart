@@ -1,8 +1,10 @@
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart';
 
+@immutable
 class VideoClip extends Equatable {
   final String sourcePath;
-  final String? processedPath; // Path to a processed version (e.g., stabilized)
+  final String? processedPath;
   final Duration startTimeInSource;
   final Duration endTimeInSource;
   final String uniqueId;
@@ -10,48 +12,28 @@ class VideoClip extends Equatable {
 
   const VideoClip({
     required this.sourcePath,
-    this.processedPath,
     required this.startTimeInSource,
     required this.endTimeInSource,
     required this.uniqueId,
+    this.processedPath,
     this.speed = 1.0,
   });
 
-  /// The actual file path that should be used for playback or processing.
-  /// Defaults to the processed path if it exists, otherwise the original source.
   String get playablePath => processedPath ?? sourcePath;
 
-  /// The duration of this specific clip segment.
-  Duration get duration {
-    // If the clip has been processed (e.g., for speed), its start/end times
-    // are relative to the new file, so we don't divide by speed again.
-    if (processedPath != null) {
-      return endTimeInSource - startTimeInSource;
-    }
-    // For a virtual clip from the original source, calculate its new duration.
-    final originalDuration = endTimeInSource - startTimeInSource;
-    if (speed <= 0) return originalDuration; // Avoid division by zero
-    return Duration(
-      microseconds: (originalDuration.inMicroseconds / speed).round(),
-    );
-  }
+  // --- NEW: The missing getter for the clip's original duration from its source ---
+  Duration get durationInSource => endTimeInSource - startTimeInSource;
 
-  /// Creates a copy of this VideoClip but with the given fields replaced with the new values.
-  VideoClip copyWith({
-    String? sourcePath,
-    String? processedPath,
-    Duration? startTimeInSource,
-    Duration? endTimeInSource,
-    String? uniqueId,
-    double? speed,
-  }) {
-    return VideoClip(
-      sourcePath: sourcePath ?? this.sourcePath,
-      processedPath: processedPath ?? this.processedPath,
-      startTimeInSource: startTimeInSource ?? this.startTimeInSource,
-      endTimeInSource: endTimeInSource ?? this.endTimeInSource,
-      uniqueId: uniqueId ?? this.uniqueId,
-      speed: speed ?? this.speed,
+  // The final duration of the clip on the timeline, accounting for speed changes
+  Duration get duration {
+    if (processedPath != null) {
+      // Processed clips are self-contained, so their duration is their full length
+      return endTimeInSource;
+    }
+    // For virtual clips, calculate the duration based on speed
+    if (speed <= 0) return durationInSource;
+    return Duration(
+      microseconds: (durationInSource.inMicroseconds / speed).round(),
     );
   }
 
@@ -64,4 +46,25 @@ class VideoClip extends Equatable {
     uniqueId,
     speed,
   ];
+
+  VideoClip copyWith({
+    String? sourcePath,
+    String? processedPath,
+    bool clearProcessedPath = false,
+    Duration? startTimeInSource,
+    Duration? endTimeInSource,
+    String? uniqueId,
+    double? speed,
+  }) {
+    return VideoClip(
+      sourcePath: sourcePath ?? this.sourcePath,
+      processedPath: clearProcessedPath
+          ? null
+          : processedPath ?? this.processedPath,
+      startTimeInSource: startTimeInSource ?? this.startTimeInSource,
+      endTimeInSource: endTimeInSource ?? this.endTimeInSource,
+      uniqueId: uniqueId ?? this.uniqueId,
+      speed: speed ?? this.speed,
+    );
+  }
 }

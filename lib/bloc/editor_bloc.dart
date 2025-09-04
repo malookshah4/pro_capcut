@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
@@ -16,6 +16,7 @@ part 'editor_state.dart';
 class EditorBloc extends Bloc<EditorEvent, EditorState> {
   EditorBloc() : super(EditorInitial()) {
     on<EditorVideoInitialized>(_onVideoInitialized);
+    on<ClipAdded>(_onClipAdded);
     on<StabilizationStarted>(_onStabilizationStarted);
     on<UndoRequested>(_onUndoRequested);
     on<RedoRequested>(_onRedoRequested);
@@ -61,7 +62,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
 
     newTimelineHistory.add(newClips);
 
-    // --- FIX: Recalculate the total duration from the new clip list ---
     final newTotalDuration = newClips.fold(
       Duration.zero,
       (prev, clip) => prev + clip.duration,
@@ -73,7 +73,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         historyIndex: newTimelineHistory.length - 1,
         isPlaying: false,
         deselectClip: true,
-        // Pass the new, correct duration to the state
         videoDuration: newTotalDuration,
       ),
     );
@@ -97,9 +96,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
       uniqueId: const Uuid().v4(),
     );
 
-    // Also calculate the initial duration for the first state
-    final totalDuration = initialClip.duration;
-
     emit(
       EditorLoaded(
         timelineHistory: [
@@ -107,9 +103,31 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         ],
         historyIndex: 0,
         isPlaying: false,
-        videoDuration: totalDuration,
+        videoDuration: initialClip.duration,
       ),
     );
+  }
+
+  Future<void> _onClipAdded(ClipAdded event, Emitter<EditorState> emit) async {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+
+    final info = await FFprobeKit.getMediaInformation(event.videoFile.path);
+    final durationMs =
+        (double.tryParse(info.getMediaInformation()?.getDuration() ?? '0') ??
+            0) *
+        1000;
+
+    final newClip = VideoClip(
+      sourcePath: event.videoFile.path,
+      startTimeInSource: Duration.zero,
+      endTimeInSource: Duration(milliseconds: durationMs.round()),
+      uniqueId: const Uuid().v4(),
+    );
+
+    final newClips = List<VideoClip>.from(currentState.currentClips)
+      ..add(newClip);
+    _addHistory(newClips, emit);
   }
 
   void __onVideoPositionChanged(
@@ -118,13 +136,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
   ) {
     if (state is EditorLoaded) {
       final currentState = state as EditorLoaded;
-      emit(
-        currentState.copyWith(
-          // Allow this event to update duration as well during playback/seeking
-          videoDuration: event.duration,
-          videoPosition: event.position,
-        ),
-      );
+      emit(currentState.copyWith(videoPosition: event.position));
     }
   }
 
@@ -154,20 +166,11 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     if (state is EditorLoaded) {
       final currentState = state as EditorLoaded;
       if (currentState.canUndo) {
-        // Recalculate duration on undo as well
-        final newClips =
-            currentState.timelineHistory[currentState.historyIndex - 1];
-        final newTotalDuration = newClips.fold(
-          Duration.zero,
-          (prev, clip) => prev + clip.duration,
-        );
-
         emit(
           currentState.copyWith(
             historyIndex: currentState.historyIndex - 1,
             isPlaying: false,
             deselectClip: true,
-            videoDuration: newTotalDuration,
           ),
         );
       }
@@ -178,20 +181,11 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     if (state is EditorLoaded) {
       final currentState = state as EditorLoaded;
       if (currentState.canRedo) {
-        // Recalculate duration on redo as well
-        final newClips =
-            currentState.timelineHistory[currentState.historyIndex + 1];
-        final newTotalDuration = newClips.fold(
-          Duration.zero,
-          (prev, clip) => prev + clip.duration,
-        );
-
         emit(
           currentState.copyWith(
             historyIndex: currentState.historyIndex + 1,
             isPlaying: false,
             deselectClip: true,
-            videoDuration: newTotalDuration,
           ),
         );
       }
@@ -257,6 +251,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     _addHistory(newClips, emit);
   }
 
+  // --- This is now an instant operation ---
   void _onClipSpeedChanged(ClipSpeedChanged event, Emitter<EditorState> emit) {
     if (state is! EditorLoaded) return;
     final currentState = state as EditorLoaded;
@@ -265,7 +260,11 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
 
     final clipToChange = currentState.currentClips[clipIndex];
 
-    final newClip = clipToChange.copyWith(speed: event.newSpeed);
+    // Speed change is now non-destructive. We just update the instruction.
+    final newClip = clipToChange.copyWith(
+      speed: event.newSpeed,
+      processedPath: null, // Clear any previous processing
+    );
 
     final newClips = List<VideoClip>.from(currentState.currentClips);
     newClips[clipIndex] = newClip;
