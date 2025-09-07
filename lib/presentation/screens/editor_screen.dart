@@ -2,13 +2,14 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:pro_capcut/presentation/widgets/_playback_controls.dart';
 import 'package:pro_capcut/presentation/widgets/_video_viewport.dart';
 import 'package:pro_capcut/presentation/widgets/editor_toolbars.dart';
+import 'package:pro_capcut/presentation/widgets/export_options_sheet.dart';
+import 'package:pro_capcut/presentation/widgets/exporting_screen.dart';
 import 'package:pro_capcut/presentation/widgets/procssing_overlay.dart';
 import 'package:pro_capcut/presentation/widgets/timeline_area.dart';
 import 'package:video_player/video_player.dart';
@@ -21,7 +22,8 @@ class EditorScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return BlocProvider(
       create: (context) => EditorBloc()..add(EditorVideoInitialized(videoFile)),
-      child: const EditorView(),
+      // The child of BlocProvider is now our new ChangeNotifierProvider
+      child: EditorView(),
     );
   }
 }
@@ -53,6 +55,13 @@ class _EditorViewState extends State<EditorView> {
     super.dispose();
   }
 
+  void _onClipsChanged(List<VideoClip> newClips) {
+    if (!listEquals(_lastKnownClips, newClips)) {
+      _lastKnownClips = List.from(newClips);
+      _updateControllers(newClips);
+    }
+  }
+
   Future<void> _updateControllers(List<VideoClip> clips) async {
     if (!mounted) return;
 
@@ -75,8 +84,8 @@ class _EditorViewState extends State<EditorView> {
       }
     }
 
-    for (final oldController in oldControllers.values) {
-      oldController.dispose();
+    for (var controller in oldControllers.values) {
+      controller.dispose();
     }
 
     if (mounted) {
@@ -104,7 +113,7 @@ class _EditorViewState extends State<EditorView> {
     final clip = clips[index];
     final controller = _controllers[clip.playablePath];
 
-    if (controller != null) {
+    if (controller != null && controller.value.isInitialized) {
       controller.setPlaybackSpeed(clip.speed);
     }
 
@@ -116,19 +125,7 @@ class _EditorViewState extends State<EditorView> {
 
     if (seekToStart && _activeController != null) {
       _activeController!.seekTo(clip.startTimeInSource);
-      Duration globalPosition = Duration.zero;
-      for (int i = 0; i < index; i++) {
-        globalPosition += clips[i].duration;
-      }
-      final totalDuration = clips.fold(
-        Duration.zero,
-        (prev, clip) => prev + clip.duration,
-      );
-      context.read<EditorBloc>().add(
-        VideoPositionChanged(globalPosition, totalDuration),
-      );
     }
-
     _currentClipIndex = index;
   }
 
@@ -156,13 +153,17 @@ class _EditorViewState extends State<EditorView> {
       if (_currentClipIndex >= currentClips.length) return;
       final activeClip = currentClips[_currentClipIndex];
 
+      // FIX: This logic correctly calculates the global position and handles clip transitions
       Duration globalPosition = Duration.zero;
       for (int i = 0; i < _currentClipIndex; i++) {
         globalPosition += currentClips[i].duration;
       }
-      globalPosition +=
-          ((position - activeClip.startTimeInSource) * (1 / activeClip.speed));
+      final timeInClip = (position - activeClip.startTimeInSource);
+      globalPosition += Duration(
+        microseconds: (timeInClip.inMicroseconds / activeClip.speed).round(),
+      );
 
+      // This event update drives the playhead time and timeline scrolling
       context.read<EditorBloc>().add(
         VideoPositionChanged(globalPosition, currentState.videoDuration),
       );
@@ -170,9 +171,11 @@ class _EditorViewState extends State<EditorView> {
       if (position >= activeClip.endTimeInSource) {
         final nextClipIndex = _currentClipIndex + 1;
         if (nextClipIndex < currentClips.length) {
+          // Seamlessly transition to the next clip
           _setActiveClip(nextClipIndex, currentClips, seekToStart: true);
           _play();
         } else {
+          // Reached the end of the timeline
           _pause();
           _setActiveClip(0, currentClips, seekToStart: true);
         }
@@ -223,7 +226,11 @@ class _EditorViewState extends State<EditorView> {
         if (seek && _activeController != null) {
           final timeIntoClip = globalPosition - cumulativeDuration;
           final seekPosInSource =
-              clip.startTimeInSource + (timeIntoClip * clip.speed);
+              clip.startTimeInSource +
+              Duration(
+                microseconds: (timeIntoClip.inMicroseconds * clip.speed)
+                    .round(),
+              );
           _activeController!.seekTo(seekPosInSource);
         }
         return;
@@ -239,10 +246,7 @@ class _EditorViewState extends State<EditorView> {
     return BlocConsumer<EditorBloc, EditorState>(
       listener: (context, state) {
         if (state is EditorLoaded) {
-          if (!listEquals(_lastKnownClips, state.currentClips)) {
-            _lastKnownClips = List.from(state.currentClips);
-            _updateControllers(state.currentClips);
-          }
+          _onClipsChanged(state.currentClips);
 
           if (state.selectedClipIndex != null &&
               _currentToolbar != EditorToolbar.edit) {
@@ -261,6 +265,14 @@ class _EditorViewState extends State<EditorView> {
           );
         }
 
+        if (state is EditorProcessing && state.type == ProcessingType.export) {
+          return ExportingScreen(
+            processingState: state,
+            // Pass the active controller to show a preview
+            previewController: _activeController,
+          );
+        }
+
         return Scaffold(
           backgroundColor: Colors.black,
           appBar: AppBar(
@@ -269,12 +281,51 @@ class _EditorViewState extends State<EditorView> {
             elevation: 0,
             leading: const BackButton(color: Colors.white),
             actions: [
-              TextButton(
-                onPressed: () =>
-                    context.read<EditorBloc>().add(ExportStarted()),
-                child: const Text(
-                  'Export',
-                  style: TextStyle(color: Colors.blueAccent, fontSize: 16),
+              GestureDetector(
+                onTap: () async {
+                  // Show the bottom sheet and wait for a result
+                  final ExportSettings? settings =
+                      await showModalBottomSheet<ExportSettings>(
+                        context: context,
+                        backgroundColor: Colors.transparent,
+                        builder: (ctx) => const ExportOptionsSheet(),
+                      );
+
+                  // If the user confirmed, settings will not be null
+                  if (settings != null && context.mounted) {
+                    // TODO: In the future, pass settings to the event
+                    // context.read<EditorBloc>().add(ExportStarted(settings));
+                    context.read<EditorBloc>().add(ExportStarted());
+                  }
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(right: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.blueAccent,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Row(
+                    children: [
+                      Text(
+                        'Export',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(width: 4),
+                      Icon(
+                        Icons.arrow_upward_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -288,7 +339,6 @@ class _EditorViewState extends State<EditorView> {
                     loadedState: state,
                     onPlayPause: _onPlayPause,
                   ),
-                  // This is the call that was causing errors
                   TimelineArea(
                     loadedState: state,
                     onScroll: _onTimelineScrolled,

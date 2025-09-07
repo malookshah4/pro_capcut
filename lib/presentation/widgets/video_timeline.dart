@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
 import 'package:pro_capcut/data/services/thumbnail_service.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
+import 'package:pro_capcut/presentation/widgets/trimming_handles.dart';
 
 class TimeMarkers extends StatelessWidget {
   final Duration totalDuration;
@@ -122,20 +123,29 @@ class VideoTimeline extends StatelessWidget {
               onTap: () => onClipTapped(isSelected ? null : index),
               child: Container(
                 width: clipWidth,
+                height: 50, // Ensure a fixed height
                 margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: isSelected ? Colors.white : Colors.grey[800]!,
-                    width: 2.5,
-                  ),
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6.0),
-                  child: ClipTimelineItem(
-                    key: ValueKey(clip.uniqueId),
-                    clip: clip,
-                  ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // The main thumbnail item
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(2.0),
+                      child: ClipTimelineItem(
+                        key: ValueKey(clip.uniqueId), // Use a unique key
+                        clip: clip,
+                      ),
+                    ),
+
+                    // The TrimmingHandles are overlaid on top,
+                    // but ONLY if the clip is selected.
+                    if (isSelected)
+                      TrimmingHandles(
+                        clip: clip,
+                        clipIndex: index,
+                        pixelsPerSecond: pixelsPerSecond,
+                      ),
+                  ],
                 ),
               ),
             );
@@ -152,7 +162,6 @@ class _AddClipButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () async {
-        print("addclip button click");
         final ImagePicker picker = ImagePicker();
         final XFile? video = await picker.pickVideo(
           source: ImageSource.gallery,
@@ -227,7 +236,7 @@ class _ClipTimelineItemState extends State<ClipTimelineItem> {
                       thumbData,
                       fit: BoxFit.cover,
                       gaplessPlayback: true,
-                      height: 60,
+                      height: 48,
                     )
                   : Container(color: Colors.grey[800]),
             );

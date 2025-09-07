@@ -24,6 +24,8 @@ class EditorLoaded extends EditorState {
   final int? selectedClipIndex;
   final Duration videoPosition;
   final Duration videoDuration;
+  final List<VideoClip>? liveClips;
+  final List<AudioClip> audioClips;
 
   const EditorLoaded({
     required this.timelineHistory,
@@ -32,11 +34,15 @@ class EditorLoaded extends EditorState {
     this.selectedClipIndex,
     this.videoPosition = Duration.zero,
     this.videoDuration = Duration.zero,
+    this.liveClips,
+    this.audioClips = const [],
   });
 
   List<VideoClip> get currentClips => timelineHistory[historyIndex];
   bool get canUndo => historyIndex > 0;
   bool get canRedo => historyIndex < timelineHistory.length - 1;
+  List<VideoClip> get liveCurrentClip =>
+      liveClips ?? timelineHistory[historyIndex];
 
   EditorLoaded copyWith({
     List<List<VideoClip>>? timelineHistory,
@@ -46,6 +52,9 @@ class EditorLoaded extends EditorState {
     bool deselectClip = false,
     Duration? videoPosition,
     Duration? videoDuration,
+    List<VideoClip>? liveClips,
+    bool clearLiveClips = false,
+    List<AudioClip>? audioClips,
   }) {
     return EditorLoaded(
       timelineHistory: timelineHistory ?? this.timelineHistory,
@@ -56,6 +65,8 @@ class EditorLoaded extends EditorState {
       selectedClipIndex: deselectClip
           ? null
           : (selectedClipIndex ?? this.selectedClipIndex),
+      liveClips: clearLiveClips ? null : liveClips ?? this.liveClips,
+      audioClips: audioClips ?? this.audioClips,
     );
   }
 
@@ -67,6 +78,7 @@ class EditorLoaded extends EditorState {
     selectedClipIndex,
     videoDuration,
     videoPosition,
+    audioClips,
   ];
 }
 
@@ -81,6 +93,7 @@ class EditorProcessing extends EditorLoaded {
     super.selectedClipIndex,
     required this.progress,
     required this.type,
+    super.audioClips,
   });
 
   @override
@@ -91,5 +104,6 @@ class EditorProcessing extends EditorLoaded {
     selectedClipIndex,
     progress,
     type,
+    audioClips,
   ];
 }

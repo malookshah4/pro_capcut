@@ -76,3 +76,22 @@ class ClipAdded extends EditorEvent {
   final File videoFile;
   const ClipAdded(this.videoFile);
 }
+
+class ClipTrimmed extends EditorEvent {
+  final int clipIndex;
+  // Use nullable Durations so we know which handle is being dragged
+  final Duration? newStart;
+  final Duration? newEnd;
+
+  const ClipTrimmed({required this.clipIndex, this.newStart, this.newEnd});
+
+  @override
+  List<Object> get props => [clipIndex, newStart ?? '', newEnd ?? ''];
+}
+
+class ClipTrimEnded extends EditorEvent {}
+
+class AudioExtractedAndAdded extends EditorEvent {
+  final File videoFile;
+  const AudioExtractedAndAdded(this.videoFile);
+}

@@ -1,7 +1,10 @@
 // lib/presentation/widgets/editor_toolbars.dart
+import 'dart:io';
+
 import 'package:eva_icons_flutter/eva_icons_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
 import 'package:pro_capcut/presentation/widgets/speed_control_sheet.dart';
 
@@ -28,7 +31,7 @@ class MainToolbar extends StatelessWidget {
         currentIndex: currentIndex,
         onTap: onTap, // Pass the tap event directly up
         backgroundColor: const Color.fromARGB(255, 22, 22, 22),
-        selectedItemColor: Colors.white,
+        selectedItemColor: Colors.grey,
         unselectedItemColor: Colors.grey,
         type: BottomNavigationBarType.fixed,
         items: const [
@@ -169,7 +172,7 @@ class AudioToolbar extends StatelessWidget {
             IconButton(
               icon: const Icon(
                 Icons.arrow_back_ios_new,
-                color: Colors.white,
+                color: Colors.grey,
                 size: 20,
               ),
               onPressed: onBack,
@@ -185,18 +188,43 @@ class AudioToolbar extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
                   _buildToolbarItem(
-                    icon: Icons.auto_fix_high,
-                    label: 'Enhance Voice',
-                    onTap: () {
-                      context.read<EditorBloc>().add(AiEnhanceVoiceStarted());
-                      onBack();
+                    icon: Icons.queue_music_rounded,
+                    label: "Extract",
+                    onTap: () async {
+                      final picker = ImagePicker();
+                      final video = await picker.pickVideo(
+                        source: ImageSource.gallery,
+                      );
+                      if (video != null && context.mounted) {
+                        context.read<EditorBloc>().add(
+                          AudioExtractedAndAdded(File(video.path)),
+                        );
+                      }
                     },
+                    badge: Icon(
+                      Icons.diamond_rounded,
+                      size: 12,
+                      color: Colors.blue,
+                    ),
+                  ),
+                  _buildToolbarItem(
+                    icon: Icons.auto_fix_high,
+                    label: 'Enhance Audio',
+                    onTap: () {},
                   ),
                   _buildToolbarItem(
                     icon: Icons.mic_off_outlined,
                     label: 'Reduce Noise',
+                    badge: Text(
+                      "AI",
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.blue,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     onTap: () {
-                      context.read<EditorBloc>().add(NoiseReductionApplied());
+                      context.read<EditorBloc>().add(AiEnhanceVoiceStarted());
                       onBack();
                     },
                   ),
@@ -215,21 +243,31 @@ Widget _buildToolbarItem({
   required IconData icon,
   required String label,
   required VoidCallback onTap,
+  Widget? badge,
 }) {
   return GestureDetector(
     onTap: onTap,
     child: Container(
       color: Colors.transparent,
       padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Stack(
         children: [
-          Icon(icon, color: Colors.white, size: 28),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(color: Colors.white, fontSize: 12),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 22, color: Colors.grey),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.grey,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
           ),
+          if (badge != null) Positioned(top: 5, right: 0, child: badge),
         ],
       ),
     ),

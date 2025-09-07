@@ -16,7 +16,7 @@ class AiDenoiseService {
   static const int _sampleRate = 16000;
   static const int _frameSize = 512;
   static const int _hopSize = 128;
-  static const int _fftSize = 512;
+  // static const int _fftSize = 512;
   static const int _numBins = 257; // FFT size/2 + 1
 
   bool _modelsLoaded = false;

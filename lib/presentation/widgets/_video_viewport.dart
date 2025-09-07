@@ -10,7 +10,7 @@ class VideoViewport extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: MediaQuery.of(context).size.height * 0.5,
+      height: MediaQuery.of(context).size.height * 0.450,
       color: Colors.black,
       child: Center(
         child: controller != null && controller!.value.isInitialized

@@ -29,7 +29,7 @@ class PlaybackControls extends StatelessWidget {
           ),
           const Spacer(),
           IconButton(
-            icon: const Icon(Icons.undo),
+            icon: const Icon(Icons.undo_rounded),
             color: loadedState.canUndo ? Colors.white : Colors.grey[700],
             onPressed: loadedState.canUndo
                 ? () => context.read<EditorBloc>().add(UndoRequested())
@@ -38,16 +38,16 @@ class PlaybackControls extends StatelessWidget {
           IconButton(
             icon: Icon(
               loadedState.isPlaying
-                  ? Icons.pause_circle_filled
-                  : Icons.play_circle_filled,
+                  ? Icons.pause_rounded
+                  : Icons.play_arrow_rounded,
               color: Colors.white,
-              size: 40,
+              size: 30,
             ),
             // FIX: Use the onPlayPause callback passed from the parent.
             onPressed: onPlayPause,
           ),
           IconButton(
-            icon: const Icon(Icons.redo),
+            icon: const Icon(Icons.redo_rounded),
             color: loadedState.canRedo ? Colors.white : Colors.grey[700],
             onPressed: loadedState.canRedo
                 ? () => context.read<EditorBloc>().add(RedoRequested())

@@ -7,6 +7,7 @@ import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pro_capcut/domain/models/audio_clip.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:uuid/uuid.dart';
 
@@ -30,9 +31,10 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<ClipDeleted>(_onClipDeleted);
     on<ExportStarted>(_onExportStarted);
     on<ClipSpeedChanged>(_onClipSpeedChanged);
+    on<ClipTrimmed>(_onClipTrimmed);
+    on<ClipTrimEnded>(_onClipTrimEnded);
+    on<AudioExtractedAndAdded>(_onAudioExtractedAndAdded);
   }
-
-  // --- HELPER FUNCTIONS ---
 
   String _formatFFmpegDuration(Duration d) {
     final hours = d.inHours.toString().padLeft(2, '0');
@@ -78,8 +80,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     );
   }
 
-  // --- EVENT HANDLERS ---
-
   Future<void> _onVideoInitialized(
     EditorVideoInitialized event,
     Emitter<EditorState> emit,
@@ -89,8 +89,11 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         (double.tryParse(info.getMediaInformation()?.getDuration() ?? '0') ??
             0) *
         1000;
+    final totalDuration = Duration(milliseconds: durationMs.round());
+
     final initialClip = VideoClip(
       sourcePath: event.videoFile.path,
+      sourceDuration: totalDuration,
       startTimeInSource: Duration.zero,
       endTimeInSource: Duration(milliseconds: durationMs.round()),
       uniqueId: const Uuid().v4(),
@@ -117,9 +120,13 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         (double.tryParse(info.getMediaInformation()?.getDuration() ?? '0') ??
             0) *
         1000;
+    final totalDuration = Duration(
+      milliseconds: durationMs.round(),
+    ); // <-- Use this
 
     final newClip = VideoClip(
       sourcePath: event.videoFile.path,
+      sourceDuration: totalDuration,
       startTimeInSource: Duration.zero,
       endTimeInSource: Duration(milliseconds: durationMs.round()),
       uniqueId: const Uuid().v4(),
@@ -251,7 +258,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     _addHistory(newClips, emit);
   }
 
-  // --- This is now an instant operation ---
   void _onClipSpeedChanged(ClipSpeedChanged event, Emitter<EditorState> emit) {
     if (state is! EditorLoaded) return;
     final currentState = state as EditorLoaded;
@@ -481,5 +487,136 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     );
 
     return completer.future;
+  }
+
+  void _onClipTrimEnded(ClipTrimEnded event, Emitter<EditorState> emit) {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+
+    // If there's a live state from trimming, this saves it to the
+    // official undo/redo history and clears the live state.
+    if (currentState.liveClips != null) {
+      _addHistory(currentState.liveClips!, emit);
+    }
+  }
+
+  void _onClipTrimmed(ClipTrimmed event, Emitter<EditorState> emit) {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+
+    final clipToTrim = currentState.currentClips[event.clipIndex];
+
+    // VVVVVV THIS IS THE CORRECTED LOGIC VVVVVV
+    // 1. Initialize local variables with the clip's current values.
+    var updatedStart = clipToTrim.startTimeInSource;
+    var updatedEnd = clipToTrim.endTimeInSource;
+
+    // 2. Apply the new start or end time from the event.
+    if (event.newStart != null) {
+      updatedStart = event.newStart!;
+    } else if (event.newEnd != null) {
+      updatedEnd = event.newEnd!;
+    }
+
+    // 3. Enforce trimming rules on the local variables.
+    if (updatedStart < Duration.zero) {
+      updatedStart = Duration.zero;
+    }
+    if (updatedEnd > clipToTrim.sourceDuration) {
+      updatedEnd = clipToTrim.sourceDuration;
+    }
+    if (updatedEnd - updatedStart < const Duration(milliseconds: 100)) {
+      if (event.newStart != null) {
+        updatedStart = updatedEnd - const Duration(milliseconds: 100);
+      } else {
+        updatedEnd = updatedStart + const Duration(milliseconds: 100);
+      }
+    }
+    // ^^^^^^ THIS IS THE CORRECTED LOGIC ^^^^^^
+
+    // Create the updated clip using the corrected local variables.
+    final trimmedClip = clipToTrim.copyWith(
+      startTimeInSource: updatedStart,
+      endTimeInSource: updatedEnd,
+    );
+
+    final newClips = List<VideoClip>.from(currentState.currentClips);
+    newClips[event.clipIndex] = trimmedClip;
+
+    emit(currentState.copyWith(liveClips: newClips));
+  }
+
+  Future<void> _onAudioExtractedAndAdded(
+    AudioExtractedAndAdded event,
+    Emitter<EditorState> emit,
+  ) async {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+
+    // 1. Show a processing state to the user
+    emit(
+      EditorProcessing(
+        // You can create a new ProcessingType for this if you want
+        type: ProcessingType.export,
+        progress: 0.0, // Or make it indeterminate
+        // copy other properties from currentState...
+        timelineHistory: currentState.timelineHistory,
+        historyIndex: currentState.historyIndex,
+        isPlaying: false,
+      ),
+    );
+
+    try {
+      final Directory appDirectory = await getApplicationDocumentsDirectory();
+      // 2. Define the output path for our new audio file
+      final String outputPath =
+          '${appDirectory.path}/extracted_audio_${const Uuid().v4()}.m4a';
+
+      // 3. Construct the FFmpeg command
+      // -i: input file
+      // -vn: "no video", strips the video stream
+      // -c:a aac: uses the high-quality AAC audio codec
+      final command =
+          '-i "${event.videoFile.path}" -vn -acodec aac -b:a 192k -y "$outputPath"';
+
+      final session = await FFmpegKit.execute(command);
+      final returnCode = await session.getReturnCode();
+
+      if (ReturnCode.isSuccess(returnCode)) {
+        // 4. Get the duration of the newly created audio file
+        final info = await FFprobeKit.getMediaInformation(outputPath);
+        final durationMs =
+            (double.tryParse(
+                  info.getMediaInformation()?.getDuration() ?? '0',
+                ) ??
+                0) *
+            1000;
+        final audioDuration = Duration(milliseconds: durationMs.round());
+
+        // 5. Create the new AudioClip model
+        final newAudioClip = AudioClip(
+          filePath: outputPath,
+          uniqueId: const Uuid().v4(),
+          duration: audioDuration,
+          // It starts at the current playhead position
+          startTimeInTimeline: currentState.videoPosition,
+        );
+
+        // 6. Add it to the list and update the state
+        final newAudioClips = List<AudioClip>.from(currentState.audioClips)
+          ..add(newAudioClip);
+
+        // We use copyWith here instead of _addHistory because adding audio
+        // is often considered a non-destructive layering action, not an undoable "edit"
+        // to the main timeline. You can change this to _addHistory if you prefer.
+        emit(currentState.copyWith(audioClips: newAudioClips));
+      } else {
+        throw Exception("FFmpeg failed to extract audio.");
+      }
+    } catch (e) {
+      print("Error extracting audio: $e");
+      // On failure, return to the previous loaded state
+      emit(currentState.copyWith());
+    }
   }
 }
