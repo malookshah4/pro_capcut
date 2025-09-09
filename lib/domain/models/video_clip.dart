@@ -1,41 +1,58 @@
+// lib/domain/models/video_clip.dart
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart';
-import 'package:pro_capcut/domain/models/audio_clip.dart';
+import 'package:hive/hive.dart';
+
+part 'video_clip.g.dart';
 
 @immutable
+@HiveType(typeId: 1)
 class VideoClip extends Equatable {
+  @HiveField(0)
   final String sourcePath;
-  final String? processedPath;
-  final Duration sourceDuration;
-  final Duration startTimeInSource;
-  final Duration endTimeInSource;
-  final String uniqueId;
-  final double speed;
-  final List<AudioClip> audioClips;
 
+  @HiveField(1)
+  final String? processedPath;
+
+  @HiveField(2)
+  final int sourceDurationInMicroseconds;
+
+  @HiveField(3)
+  final int startTimeInSourceInMicroseconds;
+
+  @HiveField(4)
+  final int endTimeInSourceInMicroseconds;
+
+  @HiveField(5)
+  final String uniqueId;
+
+  @HiveField(6)
+  final double speed;
+
+  // --- THIS CONSTRUCTOR IS NOW CORRECTED ---
   const VideoClip({
     required this.sourcePath,
-    required this.sourceDuration,
-    required this.startTimeInSource,
-    required this.endTimeInSource,
+    required this.sourceDurationInMicroseconds,
+    required this.startTimeInSourceInMicroseconds,
+    required this.endTimeInSourceInMicroseconds,
     required this.uniqueId,
     this.processedPath,
     this.speed = 1.0,
-    this.audioClips = const [],
   });
 
+  Duration get sourceDuration =>
+      Duration(microseconds: sourceDurationInMicroseconds);
+  Duration get startTimeInSource =>
+      Duration(microseconds: startTimeInSourceInMicroseconds);
+  Duration get endTimeInSource =>
+      Duration(microseconds: endTimeInSourceInMicroseconds);
+
   String get playablePath => processedPath ?? sourcePath;
-
-  // --- NEW: The missing getter for the clip's original duration from its source ---
   Duration get durationInSource => endTimeInSource - startTimeInSource;
-
-  // The final duration of the clip on the timeline, accounting for speed changes
   Duration get duration {
     if (processedPath != null) {
-      // Processed clips are self-contained, so their duration is their full length
       return endTimeInSource;
     }
-    // For virtual clips, calculate the duration based on speed
     if (speed <= 0) return durationInSource;
     return Duration(
       microseconds: (durationInSource.inMicroseconds / speed).round(),
@@ -46,35 +63,37 @@ class VideoClip extends Equatable {
   List<Object?> get props => [
     sourcePath,
     processedPath,
-    startTimeInSource,
-    endTimeInSource,
+    sourceDurationInMicroseconds,
+    startTimeInSourceInMicroseconds,
+    endTimeInSourceInMicroseconds,
     uniqueId,
     speed,
-    audioClips,
   ];
 
   VideoClip copyWith({
     String? sourcePath,
     String? processedPath,
-    Duration? sourceDuration,
+    int? sourceDurationInMicroseconds,
     bool clearProcessedPath = false,
-    Duration? startTimeInSource,
-    Duration? endTimeInSource,
+    int? startTimeInSourceInMicroseconds,
+    int? endTimeInSourceInMicroseconds,
     String? uniqueId,
     double? speed,
-    List<AudioClip>? audioClips,
   }) {
     return VideoClip(
       sourcePath: sourcePath ?? this.sourcePath,
-      sourceDuration: sourceDuration ?? this.sourceDuration,
+      sourceDurationInMicroseconds:
+          sourceDurationInMicroseconds ?? this.sourceDurationInMicroseconds,
       processedPath: clearProcessedPath
           ? null
-          : processedPath ?? this.processedPath,
-      startTimeInSource: startTimeInSource ?? this.startTimeInSource,
-      endTimeInSource: endTimeInSource ?? this.endTimeInSource,
+          : (processedPath ?? this.processedPath),
+      startTimeInSourceInMicroseconds:
+          startTimeInSourceInMicroseconds ??
+          this.startTimeInSourceInMicroseconds,
+      endTimeInSourceInMicroseconds:
+          endTimeInSourceInMicroseconds ?? this.endTimeInSourceInMicroseconds,
       uniqueId: uniqueId ?? this.uniqueId,
       speed: speed ?? this.speed,
-      audioClips: audioClips ?? this.audioClips,
     );
   }
 }

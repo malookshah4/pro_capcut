@@ -1,35 +1,111 @@
 // lib/presentation/screens/home_screen.dart
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pro_capcut/bloc/projects_bloc.dart';
+import 'package:pro_capcut/domain/models/project.dart';
+import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:pro_capcut/presentation/screens/editor_screen.dart';
+import 'package:pro_capcut/presentation/widgets/project_card.dart';
+import 'package:uuid/uuid.dart';
+import 'package:video_compress/video_compress.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
-  void _createNewProject(BuildContext context) async {
+  Future<void> _createNewProject(BuildContext context) async {
     final ImagePicker picker = ImagePicker();
     final XFile? video = await picker.pickVideo(source: ImageSource.gallery);
 
     if (video != null && context.mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => EditorScreen(videoFile: File(video.path)),
-        ),
+      // BEST PRACTICE: Show a loading indicator for a better user experience.
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return const PopScope(
+            canPop: false,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        },
       );
+
+      final projectId = const Uuid().v4();
+      String? thumbnailPath;
+
+      try {
+        final thumbnailBytes = await VideoCompress.getByteThumbnail(
+          video.path,
+          quality: 30,
+        );
+
+        if (thumbnailBytes != null && thumbnailBytes.isNotEmpty) {
+          final dir = await getApplicationDocumentsDirectory();
+          thumbnailPath = '${dir.path}/thumb_$projectId.jpg';
+          final file = File(thumbnailPath);
+          await file.writeAsBytes(thumbnailBytes, flush: true);
+        }
+      } catch (e) {
+        print("!!! ERROR generating thumbnail: $e");
+        // Optionally show a user-facing error message here
+      }
+
+      final info = await FFprobeKit.getMediaInformation(video.path);
+      final durationMs =
+          (double.tryParse(info.getMediaInformation()?.getDuration() ?? '0') ??
+              0) *
+          1000;
+      final totalDuration = Duration(milliseconds: durationMs.round());
+
+      final initialClip = VideoClip(
+        sourcePath: video.path,
+        sourceDurationInMicroseconds: totalDuration.inMicroseconds,
+        startTimeInSourceInMicroseconds: 0,
+        endTimeInSourceInMicroseconds: totalDuration.inMicroseconds,
+        uniqueId: const Uuid().v4(),
+      );
+
+      final newProject = Project(
+        id: projectId,
+        lastModified: DateTime.now(),
+        videoClips: [initialClip],
+        audioClips: [],
+        thumbnailPath: thumbnailPath,
+      );
+
+      // Save the project. The BLoC's listener will automatically pick up this change.
+      final projectsBox = Hive.box<Project>('projects');
+      await projectsBox.put(newProject.id, newProject);
+
+      if (context.mounted) {
+        Navigator.pop(context); // Dismiss the loading indicator
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => EditorScreen(project: newProject),
+          ),
+        );
+
+        if (context.mounted) {
+          context.read<ProjectsBloc>().add(LoadProjects());
+        }
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF111111), // Dark background color
+      backgroundColor: const Color(0xFF111111),
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. Top Bar with Title and Search
+            // ... Your existing header and "New Project" button UI ...
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Row(
@@ -49,15 +125,11 @@ class HomeScreen extends StatelessWidget {
                       color: Colors.white,
                       size: 28,
                     ),
-                    onPressed: () {
-                      // TODO: Implement search functionality
-                    },
+                    onPressed: () {},
                   ),
                 ],
               ),
             ),
-
-            // 2. New Project Button
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: 16.0,
@@ -91,10 +163,7 @@ class HomeScreen extends StatelessWidget {
                 ),
               ),
             ),
-
             const SizedBox(height: 24),
-
-            // 3. Projects List Section
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16.0),
               child: Text(
@@ -107,28 +176,66 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            // This is where your horizontal list of saved projects will go.
-            // For now, it's a placeholder.
-            _buildProjectsList(),
-
-            const Spacer(), // Pushes content to the top
+            _buildProjectsList(), // This now uses BlocBuilder
+            const Spacer(),
           ],
         ),
       ),
     );
   }
 
-  // Placeholder widget for the horizontal project list
+  // REFACTORED: This widget now uses BlocBuilder for clean, reactive state management.
   Widget _buildProjectsList() {
-    // In a real app, this would be a ListView.builder fed by a list of project models.
-    return SizedBox(
-      height: 140, // Define a height for the scrollable area
-      child: Center(
-        child: Text(
-          'Saved projects will appear here',
-          style: TextStyle(color: Colors.grey[600]),
-        ),
-      ),
+    return BlocBuilder<ProjectsBloc, ProjectsState>(
+      builder: (context, state) {
+        if (state is ProjectsLoading) {
+          return const SizedBox(
+            height: 140,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (state is ProjectsLoaded) {
+          final projects =
+              state.projects; // Projects are pre-sorted by the BLoC
+
+          if (projects.isEmpty) {
+            return const SizedBox(
+              height: 140,
+              child: Center(
+                child: Text(
+                  'No projects yet. Create one!',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            );
+          }
+
+          return SizedBox(
+            height: 140,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: projects.length,
+              itemBuilder: (context, index) {
+                final project = projects[index];
+                return ProjectCard(project: project);
+              },
+            ),
+          );
+        }
+
+        // Fallback for any other state (e.g., an error state if you add one)
+        return const SizedBox(
+          height: 140,
+          child: Center(
+            child: Text(
+              'Something went wrong.',
+              style: TextStyle(color: Colors.red),
+            ),
+          ),
+        );
+      },
     );
   }
 }

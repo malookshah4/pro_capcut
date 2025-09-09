@@ -1,46 +1,42 @@
+// lib/domain/models/audio_clip.dart
 import 'package:equatable/equatable.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
+
+part 'audio_clip.g.dart';
 
 @immutable
+@HiveType(typeId: 2)
 class AudioClip extends Equatable {
-  /// The path to the processed audio file (e.g., extracted.aac).
+  @HiveField(0)
   final String filePath;
 
-  /// The unique ID for this clip, used for UI keys.
+  @HiveField(1)
   final String uniqueId;
 
-  /// The total duration of this audio clip.
-  final Duration duration;
+  @HiveField(2)
+  final int durationInMicroseconds;
 
-  /// The position where this clip starts on the main timeline.
-  final Duration startTimeInTimeline;
+  @HiveField(3)
+  final int startTimeInTimelineInMicroseconds;
 
+  // --- THIS CONSTRUCTOR IS NOW CORRECTED ---
   const AudioClip({
     required this.filePath,
     required this.uniqueId,
-    required this.duration,
-    required this.startTimeInTimeline,
+    required this.durationInMicroseconds,
+    required this.startTimeInTimelineInMicroseconds,
   });
+
+  Duration get duration => Duration(microseconds: durationInMicroseconds);
+  Duration get startTimeInTimeline =>
+      Duration(microseconds: startTimeInTimelineInMicroseconds);
 
   @override
   List<Object?> get props => [
     filePath,
     uniqueId,
-    duration,
-    startTimeInTimeline,
+    durationInMicroseconds,
+    startTimeInTimelineInMicroseconds,
   ];
-
-  AudioClip copyWith({
-    String? filePath,
-    String? uniqueId,
-    Duration? duration,
-    Duration? startTimeInTimeline,
-  }) {
-    return AudioClip(
-      filePath: filePath ?? this.filePath,
-      uniqueId: uniqueId ?? this.uniqueId,
-      duration: duration ?? this.duration,
-      startTimeInTimeline: startTimeInTimeline ?? this.startTimeInTimeline,
-    );
-  }
 }

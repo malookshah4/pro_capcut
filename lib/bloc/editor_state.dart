@@ -1,4 +1,4 @@
-part of 'editor_bloc.dart'; // --- This is now the only directive in the file ---
+part of 'editor_bloc.dart';
 
 enum ProcessingType {
   stabilization,
@@ -11,6 +11,7 @@ enum ProcessingType {
 
 abstract class EditorState extends Equatable {
   const EditorState();
+
   @override
   List<Object?> get props => [];
 }
@@ -18,6 +19,7 @@ abstract class EditorState extends Equatable {
 class EditorInitial extends EditorState {}
 
 class EditorLoaded extends EditorState {
+  final String projectId;
   final List<List<VideoClip>> timelineHistory;
   final int historyIndex;
   final bool isPlaying;
@@ -28,6 +30,7 @@ class EditorLoaded extends EditorState {
   final List<AudioClip> audioClips;
 
   const EditorLoaded({
+    required this.projectId,
     required this.timelineHistory,
     required this.historyIndex,
     required this.isPlaying,
@@ -45,6 +48,7 @@ class EditorLoaded extends EditorState {
       liveClips ?? timelineHistory[historyIndex];
 
   EditorLoaded copyWith({
+    String? projectId,
     List<List<VideoClip>>? timelineHistory,
     int? historyIndex,
     bool? isPlaying,
@@ -57,6 +61,7 @@ class EditorLoaded extends EditorState {
     List<AudioClip>? audioClips,
   }) {
     return EditorLoaded(
+      projectId: projectId ?? this.projectId,
       timelineHistory: timelineHistory ?? this.timelineHistory,
       historyIndex: historyIndex ?? this.historyIndex,
       isPlaying: isPlaying ?? this.isPlaying,
@@ -72,12 +77,14 @@ class EditorLoaded extends EditorState {
 
   @override
   List<Object?> get props => [
+    projectId,
     timelineHistory,
     historyIndex,
     isPlaying,
     selectedClipIndex,
     videoDuration,
     videoPosition,
+    liveClips,
     audioClips,
   ];
 }
@@ -87,23 +94,31 @@ class EditorProcessing extends EditorLoaded {
   final ProcessingType type;
 
   const EditorProcessing({
+    required super.projectId,
     required super.timelineHistory,
     required super.historyIndex,
     required super.isPlaying,
     super.selectedClipIndex,
+    super.videoPosition,
+    super.videoDuration,
+    super.liveClips,
+    super.audioClips,
     required this.progress,
     required this.type,
-    super.audioClips,
   });
 
   @override
   List<Object?> get props => [
+    projectId,
     timelineHistory,
     historyIndex,
     isPlaying,
     selectedClipIndex,
+    videoDuration,
+    videoPosition,
+    liveClips,
+    audioClips,
     progress,
     type,
-    audioClips,
   ];
 }

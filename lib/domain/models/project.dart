@@ -19,14 +19,14 @@ class Project extends HiveObject {
   @HiveField(3)
   List<AudioClip> audioClips;
 
-  // We can add more fields later, like a thumbnail path
-  // @HiveField(4)
-  // String? thumbnailPath;
+  @HiveField(4)
+  String? thumbnailPath;
 
   Project({
     required this.id,
     required this.lastModified,
     required this.videoClips,
     required this.audioClips,
+    this.thumbnailPath,
   });
 }

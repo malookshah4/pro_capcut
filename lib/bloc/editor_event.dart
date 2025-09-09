@@ -62,7 +62,11 @@ class ClipSplitRequested extends EditorEvent {
 
 class ClipDeleted extends EditorEvent {}
 
-class ExportStarted extends EditorEvent {}
+class ExportStarted extends EditorEvent {
+  // We can now pass the settings to the event
+  final ExportSettings settings;
+  const ExportStarted(this.settings);
+}
 
 class ClipSpeedChanged extends EditorEvent {
   final double newSpeed;
@@ -94,4 +98,9 @@ class ClipTrimEnded extends EditorEvent {}
 class AudioExtractedAndAdded extends EditorEvent {
   final File videoFile;
   const AudioExtractedAndAdded(this.videoFile);
+}
+
+class EditorProjectLoaded extends EditorEvent {
+  final Project project;
+  const EditorProjectLoaded(this.project);
 }

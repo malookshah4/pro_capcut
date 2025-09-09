@@ -142,7 +142,13 @@ class EditToolbar extends StatelessWidget {
                     icon: Icons.delete_outline,
                     label: 'Delete',
                     onTap: () {
-                      context.read<EditorBloc>().add(ClipDeleted());
+                      final editorBloc = context.read<EditorBloc>();
+                      final currentState = editorBloc.state;
+                      // Check that the state is loaded AND a clip is selected.
+                      if (currentState is EditorLoaded &&
+                          currentState.selectedClipIndex != null) {
+                        editorBloc.add(ClipDeleted());
+                      }
                     },
                   ),
                 ],

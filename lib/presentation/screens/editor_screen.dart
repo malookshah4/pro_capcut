@@ -1,35 +1,39 @@
+// lib/presentation/screens/editor_screen.dart
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:fluttertoast/fluttertoast.dart';
+import 'package:hive/hive.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
+import 'package:pro_capcut/domain/models/project.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:pro_capcut/presentation/widgets/_playback_controls.dart';
 import 'package:pro_capcut/presentation/widgets/_video_viewport.dart';
 import 'package:pro_capcut/presentation/widgets/editor_toolbars.dart';
 import 'package:pro_capcut/presentation/widgets/export_options_sheet.dart';
 import 'package:pro_capcut/presentation/widgets/exporting_screen.dart';
-import 'package:pro_capcut/presentation/widgets/procssing_overlay.dart';
 import 'package:pro_capcut/presentation/widgets/timeline_area.dart';
 import 'package:video_player/video_player.dart';
 
 class EditorScreen extends StatelessWidget {
-  final File videoFile;
-  const EditorScreen({super.key, required this.videoFile});
+  final Project project;
+  const EditorScreen({super.key, required this.project});
 
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => EditorBloc()..add(EditorVideoInitialized(videoFile)),
-      // The child of BlocProvider is now our new ChangeNotifierProvider
-      child: EditorView(),
+      create: (context) => EditorBloc()..add(EditorProjectLoaded(project)),
+      child: EditorView(project: project),
     );
   }
 }
 
 class EditorView extends StatefulWidget {
-  const EditorView({super.key});
+  final Project project;
+  const EditorView({super.key, required this.project});
+
   @override
   State<EditorView> createState() => _EditorViewState();
 }
@@ -44,6 +48,7 @@ class _EditorViewState extends State<EditorView> {
   int _selectedToolIndex = 0;
   bool _wasPlayingBeforeDrag = false;
   List<VideoClip> _lastKnownClips = [];
+  EditorLoaded? _latestLoadedState;
 
   @override
   void dispose() {
@@ -53,6 +58,34 @@ class _EditorViewState extends State<EditorView> {
     }
     _controllers.clear();
     super.dispose();
+  }
+
+  Future<bool> _onWillPop() async {
+    // Use the state variable, NOT context.read(). This ensures we have the final edited state.
+    if (_latestLoadedState != null) {
+      final currentState = _latestLoadedState!;
+      final updatedProject = Project(
+        id: currentState.projectId,
+        lastModified: DateTime.now(),
+        // This now correctly references the final, edited list of clips.
+        videoClips: currentState.currentClips,
+        audioClips: currentState.audioClips,
+        // This correctly preserves the thumbnail path from the original project.
+        thumbnailPath: widget.project.thumbnailPath,
+      );
+
+      final projectsBox = Hive.box<Project>('projects');
+      await projectsBox.put(updatedProject.id, updatedProject);
+
+      if (mounted) {
+        Fluttertoast.showToast(
+          msg: "Project Saved",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.CENTER,
+        );
+      }
+    }
+    return true; // Allows the screen to pop
   }
 
   void _onClipsChanged(List<VideoClip> newClips) {
@@ -153,7 +186,6 @@ class _EditorViewState extends State<EditorView> {
       if (_currentClipIndex >= currentClips.length) return;
       final activeClip = currentClips[_currentClipIndex];
 
-      // FIX: This logic correctly calculates the global position and handles clip transitions
       Duration globalPosition = Duration.zero;
       for (int i = 0; i < _currentClipIndex; i++) {
         globalPosition += currentClips[i].duration;
@@ -163,7 +195,6 @@ class _EditorViewState extends State<EditorView> {
         microseconds: (timeInClip.inMicroseconds / activeClip.speed).round(),
       );
 
-      // This event update drives the playhead time and timeline scrolling
       context.read<EditorBloc>().add(
         VideoPositionChanged(globalPosition, currentState.videoDuration),
       );
@@ -171,11 +202,9 @@ class _EditorViewState extends State<EditorView> {
       if (position >= activeClip.endTimeInSource) {
         final nextClipIndex = _currentClipIndex + 1;
         if (nextClipIndex < currentClips.length) {
-          // Seamlessly transition to the next clip
           _setActiveClip(nextClipIndex, currentClips, seekToStart: true);
           _play();
         } else {
-          // Reached the end of the timeline
           _pause();
           _setActiveClip(0, currentClips, seekToStart: true);
         }
@@ -205,7 +234,6 @@ class _EditorViewState extends State<EditorView> {
     context.read<EditorBloc>().add(
       VideoPositionChanged(newPosition, editorState.videoDuration),
     );
-
     _updateActiveClipForPosition(newPosition, clips, seek: true);
   }
 
@@ -243,155 +271,152 @@ class _EditorViewState extends State<EditorView> {
 
   @override
   Widget build(BuildContext context) {
-    return BlocConsumer<EditorBloc, EditorState>(
-      listener: (context, state) {
-        if (state is EditorLoaded) {
-          _onClipsChanged(state.currentClips);
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: BlocConsumer<EditorBloc, EditorState>(
+        listener: (context, state) {
+          // ✨ FIX 3: Keep the state variable updated on every state change.
+          if (state is EditorLoaded) {
+            // This is the crucial step. We capture the latest valid state here.
+            _latestLoadedState = state;
 
-          if (state.selectedClipIndex != null &&
-              _currentToolbar != EditorToolbar.edit) {
-            setState(() => _currentToolbar = EditorToolbar.edit);
-          } else if (state.selectedClipIndex == null &&
-              (_currentToolbar == EditorToolbar.edit)) {
-            setState(() => _currentToolbar = EditorToolbar.main);
+            _onClipsChanged(state.currentClips);
+
+            if (state.selectedClipIndex != null &&
+                _currentToolbar != EditorToolbar.edit) {
+              setState(() => _currentToolbar = EditorToolbar.edit);
+            } else if (state.selectedClipIndex == null &&
+                (_currentToolbar == EditorToolbar.edit)) {
+              setState(() => _currentToolbar = EditorToolbar.main);
+            }
           }
-        }
-      },
-      builder: (context, state) {
-        if (state is! EditorLoaded) {
-          return const Scaffold(
+        },
+        builder: (context, state) {
+          if (state is! EditorLoaded) {
+            return const Scaffold(
+              backgroundColor: Colors.black,
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+
+          if (state is EditorProcessing &&
+              state.type == ProcessingType.export) {
+            return ExportingScreen(
+              processingState: state,
+              previewController: _activeController,
+            );
+          }
+
+          return Scaffold(
             backgroundColor: Colors.black,
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
+            appBar: AppBar(
+              title: const Text('Editor'),
+              backgroundColor: Colors.black,
+              elevation: 0,
+              // The WillPopScope handles the back button automatically
+              leading: const BackButton(color: Colors.white),
+              actions: [
+                GestureDetector(
+                  onTap: () async {
+                    final ExportSettings? settings =
+                        await showModalBottomSheet<ExportSettings>(
+                          context: context,
+                          backgroundColor: Colors.transparent,
+                          builder: (ctx) => const ExportOptionsSheet(),
+                        );
 
-        if (state is EditorProcessing && state.type == ProcessingType.export) {
-          return ExportingScreen(
-            processingState: state,
-            // Pass the active controller to show a preview
-            previewController: _activeController,
-          );
-        }
-
-        return Scaffold(
-          backgroundColor: Colors.black,
-          appBar: AppBar(
-            title: const Text('Editor'),
-            backgroundColor: Colors.black,
-            elevation: 0,
-            leading: const BackButton(color: Colors.white),
-            actions: [
-              GestureDetector(
-                onTap: () async {
-                  // Show the bottom sheet and wait for a result
-                  final ExportSettings? settings =
-                      await showModalBottomSheet<ExportSettings>(
-                        context: context,
-                        backgroundColor: Colors.transparent,
-                        builder: (ctx) => const ExportOptionsSheet(),
-                      );
-
-                  // If the user confirmed, settings will not be null
-                  if (settings != null && context.mounted) {
-                    // TODO: In the future, pass settings to the event
-                    // context.read<EditorBloc>().add(ExportStarted(settings));
-                    context.read<EditorBloc>().add(ExportStarted());
-                  }
-                },
-                child: Container(
-                  margin: const EdgeInsets.only(right: 10),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.blueAccent,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Row(
-                    children: [
-                      Text(
-                        'Export',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                    if (settings != null && context.mounted) {
+                      // Pass the settings object into the event
+                      context.read<EditorBloc>().add(ExportStarted(settings));
+                    }
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.blueAccent,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      children: [
+                        Text(
+                          'Export',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
-                      SizedBox(width: 4),
-                      Icon(
-                        Icons.arrow_upward_rounded,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                    ],
+                        SizedBox(width: 4),
+                        Icon(
+                          Icons.arrow_upward_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-          body: Stack(
-            children: [
-              Column(
-                children: [
-                  VideoViewport(controller: _activeController),
-                  PlaybackControls(
-                    loadedState: state,
-                    onPlayPause: _onPlayPause,
-                  ),
-                  TimelineArea(
-                    loadedState: state,
-                    onScroll: _onTimelineScrolled,
-                    onDragStart: () {
-                      _wasPlayingBeforeDrag =
-                          _activeController?.value.isPlaying ?? false;
-                      if (_wasPlayingBeforeDrag) _pause();
-                    },
-                    onDragEnd: () {
-                      if (_wasPlayingBeforeDrag) _play();
-                    },
-                  ),
-                ],
-              ),
-              if (state is EditorProcessing)
-                ProcessingOverlay(processingState: state),
-            ],
-          ),
-          bottomNavigationBar: Builder(
-            builder: (context) {
-              switch (_currentToolbar) {
-                case EditorToolbar.main:
-                  return MainToolbar(
-                    currentIndex: _selectedToolIndex,
-                    onTap: (index) {
-                      setState(() {
-                        _selectedToolIndex = index;
-                      });
-                      if (index == 0) {
-                        setState(() => _currentToolbar = EditorToolbar.edit);
-                        if (state.selectedClipIndex == null &&
-                            state.currentClips.isNotEmpty) {
-                          context.read<EditorBloc>().add(const ClipTapped(0));
+              ],
+            ),
+            body: Column(
+              // Use Column instead of Stack for the main layout
+              children: [
+                VideoViewport(controller: _activeController),
+                PlaybackControls(loadedState: state, onPlayPause: _onPlayPause),
+                TimelineArea(
+                  loadedState: state,
+                  onScroll: _onTimelineScrolled,
+                  onDragStart: () {
+                    _wasPlayingBeforeDrag =
+                        _activeController?.value.isPlaying ?? false;
+                    if (_wasPlayingBeforeDrag) _pause();
+                  },
+                  onDragEnd: () {
+                    if (_wasPlayingBeforeDrag) _play();
+                  },
+                ),
+              ],
+            ),
+            bottomNavigationBar: Builder(
+              builder: (context) {
+                switch (_currentToolbar) {
+                  case EditorToolbar.main:
+                    return MainToolbar(
+                      currentIndex: _selectedToolIndex,
+                      onTap: (index) {
+                        setState(() => _selectedToolIndex = index);
+                        if (index == 0) {
+                          setState(() => _currentToolbar = EditorToolbar.edit);
+                          if (state.selectedClipIndex == null &&
+                              state.currentClips.isNotEmpty) {
+                            context.read<EditorBloc>().add(const ClipTapped(0));
+                          }
+                        } else if (index == 1) {
+                          setState(() => _currentToolbar = EditorToolbar.audio);
+                        } else if (index == 3) {
+                          context.read<EditorBloc>().add(
+                            StabilizationStarted(),
+                          );
                         }
-                      } else if (index == 1) {
-                        setState(() => _currentToolbar = EditorToolbar.audio);
-                      } else if (index == 3) {
-                        context.read<EditorBloc>().add(StabilizationStarted());
-                      }
-                    },
-                  );
-                case EditorToolbar.audio:
-                  return AudioToolbar(
-                    onBack: () =>
-                        setState(() => _currentToolbar = EditorToolbar.main),
-                  );
-                case EditorToolbar.edit:
-                  return const EditToolbar();
-              }
-            },
-          ),
-        );
-      },
+                      },
+                    );
+                  case EditorToolbar.audio:
+                    return AudioToolbar(
+                      onBack: () =>
+                          setState(() => _currentToolbar = EditorToolbar.main),
+                    );
+                  case EditorToolbar.edit:
+                    return const EditToolbar();
+                }
+              },
+            ),
+          );
+        },
+      ),
     );
   }
 }
