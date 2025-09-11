@@ -21,13 +21,14 @@ class ProjectAdapter extends TypeAdapter<Project> {
       lastModified: fields[1] as DateTime,
       videoClips: (fields[2] as List).cast<VideoClip>(),
       audioClips: (fields[3] as List).cast<AudioClip>(),
+      thumbnailPath: fields[4] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Project obj) {
     writer
-      ..writeByte(4)
+      ..writeByte(5)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -35,7 +36,9 @@ class ProjectAdapter extends TypeAdapter<Project> {
       ..writeByte(2)
       ..write(obj.videoClips)
       ..writeByte(3)
-      ..write(obj.audioClips);
+      ..write(obj.audioClips)
+      ..writeByte(4)
+      ..write(obj.thumbnailPath);
   }
 
   @override

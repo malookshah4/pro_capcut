@@ -21,13 +21,14 @@ class AudioClipAdapter extends TypeAdapter<AudioClip> {
       uniqueId: fields[1] as String,
       durationInMicroseconds: fields[2] as int,
       startTimeInTimelineInMicroseconds: fields[3] as int,
+      volume: fields[4] == null ? 1.0 : fields[4] as double,
     );
   }
 
   @override
   void write(BinaryWriter writer, AudioClip obj) {
     writer
-      ..writeByte(4)
+      ..writeByte(5)
       ..writeByte(0)
       ..write(obj.filePath)
       ..writeByte(1)
@@ -35,7 +36,9 @@ class AudioClipAdapter extends TypeAdapter<AudioClip> {
       ..writeByte(2)
       ..write(obj.durationInMicroseconds)
       ..writeByte(3)
-      ..write(obj.startTimeInTimelineInMicroseconds);
+      ..write(obj.startTimeInTimelineInMicroseconds)
+      ..writeByte(4)
+      ..write(obj.volume);
   }
 
   @override

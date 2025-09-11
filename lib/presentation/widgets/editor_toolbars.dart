@@ -7,6 +7,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
 import 'package:pro_capcut/presentation/widgets/speed_control_sheet.dart';
+import 'package:pro_capcut/presentation/widgets/volume_control_sheet.dart';
 
 enum EditorToolbar { main, audio, edit }
 
@@ -131,12 +132,28 @@ class EditToolbar extends StatelessWidget {
                   _buildToolbarItem(
                     icon: Icons.volume_up_outlined,
                     label: 'Volume',
-                    onTap: () {},
-                  ),
-                  _buildToolbarItem(
-                    icon: Icons.animation,
-                    label: 'Animations',
-                    onTap: () {},
+                    onTap: () {
+                      final editorBloc = context.read<EditorBloc>();
+                      final currentState = editorBloc.state;
+                      if (currentState is EditorLoaded &&
+                          currentState.selectedClipIndex != null) {
+                        final selectedClip = currentState
+                            .currentClips[currentState.selectedClipIndex!];
+
+                        showModalBottomSheet<void>(
+                          context: context,
+                          backgroundColor: Colors.transparent,
+                          builder: (ctx) {
+                            return BlocProvider.value(
+                              value: editorBloc,
+                              child: VolumeControlSheet(
+                                initialVolume: selectedClip.volume,
+                              ),
+                            );
+                          },
+                        );
+                      }
+                    },
                   ),
                   _buildToolbarItem(
                     icon: Icons.delete_outline,

@@ -29,4 +29,9 @@ class Project extends HiveObject {
     required this.audioClips,
     this.thumbnailPath,
   });
+
+  @override
+  String toString() {
+    return 'Project(id: $id, lastModified: $lastModified, thumbnailPath: $thumbnailPath, videoClips: ${videoClips.length}, audioClips: ${audioClips.length})';
+  }
 }

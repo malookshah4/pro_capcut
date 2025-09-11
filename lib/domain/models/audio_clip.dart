@@ -20,12 +20,16 @@ class AudioClip extends Equatable {
   @HiveField(3)
   final int startTimeInTimelineInMicroseconds;
 
+  @HiveField(4, defaultValue: 1.0)
+  final double volume;
+
   // --- THIS CONSTRUCTOR IS NOW CORRECTED ---
   const AudioClip({
     required this.filePath,
     required this.uniqueId,
     required this.durationInMicroseconds,
     required this.startTimeInTimelineInMicroseconds,
+    this.volume = 1.0,
   });
 
   Duration get duration => Duration(microseconds: durationInMicroseconds);
@@ -38,5 +42,6 @@ class AudioClip extends Equatable {
     uniqueId,
     durationInMicroseconds,
     startTimeInTimelineInMicroseconds,
+    volume,
   ];
 }

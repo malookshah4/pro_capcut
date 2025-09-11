@@ -1,28 +1,38 @@
-// lib/presentation/screens/home_screen.dart
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:pro_capcut/bloc/projects_bloc.dart';
 import 'package:pro_capcut/domain/models/project.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:pro_capcut/presentation/screens/editor_screen.dart';
 import 'package:pro_capcut/presentation/widgets/project_card.dart';
+import 'package:pro_capcut/utils/thumbnail_utils.dart';
 import 'package:uuid/uuid.dart';
-import 'package:video_compress/video_compress.dart';
 
-class HomeScreen extends StatelessWidget {
+// ✨ FIX: Convert HomeScreen to a StatefulWidget
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // ✨ FIX: Dispatch the initial LoadProjects event here.
+    // This ensures the widget is fully mounted before we ask for data.
+    context.read<ProjectsBloc>().add(LoadProjects());
+  }
 
   Future<void> _createNewProject(BuildContext context) async {
     final ImagePicker picker = ImagePicker();
     final XFile? video = await picker.pickVideo(source: ImageSource.gallery);
 
     if (video != null && context.mounted) {
-      // BEST PRACTICE: Show a loading indicator for a better user experience.
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -35,24 +45,8 @@ class HomeScreen extends StatelessWidget {
       );
 
       final projectId = const Uuid().v4();
-      String? thumbnailPath;
-
-      try {
-        final thumbnailBytes = await VideoCompress.getByteThumbnail(
-          video.path,
-          quality: 30,
-        );
-
-        if (thumbnailBytes != null && thumbnailBytes.isNotEmpty) {
-          final dir = await getApplicationDocumentsDirectory();
-          thumbnailPath = '${dir.path}/thumb_$projectId.jpg';
-          final file = File(thumbnailPath);
-          await file.writeAsBytes(thumbnailBytes, flush: true);
-        }
-      } catch (e) {
-        print("!!! ERROR generating thumbnail: $e");
-        // Optionally show a user-facing error message here
-      }
+      final String? thumbnailPath =
+          await ThumbnailUtils.generateAndSaveThumbnail(video.path, projectId);
 
       final info = await FFprobeKit.getMediaInformation(video.path);
       final durationMs =
@@ -77,7 +71,6 @@ class HomeScreen extends StatelessWidget {
         thumbnailPath: thumbnailPath,
       );
 
-      // Save the project. The BLoC's listener will automatically pick up this change.
       final projectsBox = Hive.box<Project>('projects');
       await projectsBox.put(newProject.id, newProject);
 
@@ -90,6 +83,7 @@ class HomeScreen extends StatelessWidget {
           ),
         );
 
+        // This refresh is now fine because the initial load is handled correctly.
         if (context.mounted) {
           context.read<ProjectsBloc>().add(LoadProjects());
         }
@@ -105,7 +99,6 @@ class HomeScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ... Your existing header and "New Project" button UI ...
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Row(
@@ -176,7 +169,7 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            _buildProjectsList(), // This now uses BlocBuilder
+            _buildProjectsList(), // This remains the same
             const Spacer(),
           ],
         ),
@@ -184,55 +177,36 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  // REFACTORED: This widget now uses BlocBuilder for clean, reactive state management.
+  // NOTE: This _buildProjectsList widget using ValueListenableBuilder is
+  // the most robust way and should be kept.
   Widget _buildProjectsList() {
-    return BlocBuilder<ProjectsBloc, ProjectsState>(
-      builder: (context, state) {
-        if (state is ProjectsLoading) {
+    final projectsBox = Hive.box<Project>('projects');
+    return ValueListenableBuilder(
+      valueListenable: projectsBox.listenable(),
+      builder: (context, Box<Project> box, _) {
+        final projects = box.values.toList();
+        projects.sort((a, b) => b.lastModified.compareTo(a.lastModified));
+        if (projects.isEmpty) {
           return const SizedBox(
             height: 140,
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        if (state is ProjectsLoaded) {
-          final projects =
-              state.projects; // Projects are pre-sorted by the BLoC
-
-          if (projects.isEmpty) {
-            return const SizedBox(
-              height: 140,
-              child: Center(
-                child: Text(
-                  'No projects yet. Create one!',
-                  style: TextStyle(color: Colors.grey),
-                ),
+            child: Center(
+              child: Text(
+                'No projects yet. Create one!',
+                style: TextStyle(color: Colors.grey),
               ),
-            );
-          }
-
-          return SizedBox(
-            height: 140,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: projects.length,
-              itemBuilder: (context, index) {
-                final project = projects[index];
-                return ProjectCard(project: project);
-              },
             ),
           );
         }
-
-        // Fallback for any other state (e.g., an error state if you add one)
-        return const SizedBox(
+        return SizedBox(
           height: 140,
-          child: Center(
-            child: Text(
-              'Something went wrong.',
-              style: TextStyle(color: Colors.red),
-            ),
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: projects.length,
+            itemBuilder: (context, index) {
+              final project = projects[index];
+              return ProjectCard(project: project);
+            },
           ),
         );
       },

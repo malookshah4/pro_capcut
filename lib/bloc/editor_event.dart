@@ -104,3 +104,12 @@ class EditorProjectLoaded extends EditorEvent {
   final Project project;
   const EditorProjectLoaded(this.project);
 }
+
+class ClipVolumeChanged extends EditorEvent {
+  final double newVolume;
+
+  const ClipVolumeChanged(this.newVolume);
+
+  @override
+  List<Object> get props => [newVolume];
+}

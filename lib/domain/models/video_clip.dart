@@ -29,6 +29,9 @@ class VideoClip extends Equatable {
   @HiveField(6)
   final double speed;
 
+  @HiveField(7)
+  final double volume;
+
   // --- THIS CONSTRUCTOR IS NOW CORRECTED ---
   const VideoClip({
     required this.sourcePath,
@@ -38,6 +41,7 @@ class VideoClip extends Equatable {
     required this.uniqueId,
     this.processedPath,
     this.speed = 1.0,
+    this.volume = 1.0,
   });
 
   Duration get sourceDuration =>
@@ -68,6 +72,7 @@ class VideoClip extends Equatable {
     endTimeInSourceInMicroseconds,
     uniqueId,
     speed,
+    volume,
   ];
 
   VideoClip copyWith({
@@ -79,6 +84,7 @@ class VideoClip extends Equatable {
     int? endTimeInSourceInMicroseconds,
     String? uniqueId,
     double? speed,
+    double? volume,
   }) {
     return VideoClip(
       sourcePath: sourcePath ?? this.sourcePath,
@@ -94,6 +100,7 @@ class VideoClip extends Equatable {
           endTimeInSourceInMicroseconds ?? this.endTimeInSourceInMicroseconds,
       uniqueId: uniqueId ?? this.uniqueId,
       speed: speed ?? this.speed,
+      volume: volume ?? this.volume,
     );
   }
 }

@@ -1,8 +1,5 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
 import 'package:pro_capcut/domain/models/audio_clip.dart';
 import 'package:pro_capcut/presentation/widgets/placeholder_track.dart';

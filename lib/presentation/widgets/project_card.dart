@@ -14,7 +14,6 @@ class ProjectCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final DateFormat formatter = DateFormat('MMM dd, yyyy');
-
     return GestureDetector(
       onTap: () async {
         // Mark onTap as async

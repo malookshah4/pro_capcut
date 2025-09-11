@@ -7,6 +7,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:hive/hive.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
+import 'package:pro_capcut/domain/models/audio_clip.dart';
 import 'package:pro_capcut/domain/models/project.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:pro_capcut/presentation/widgets/_playback_controls.dart';
@@ -15,7 +16,9 @@ import 'package:pro_capcut/presentation/widgets/editor_toolbars.dart';
 import 'package:pro_capcut/presentation/widgets/export_options_sheet.dart';
 import 'package:pro_capcut/presentation/widgets/exporting_screen.dart';
 import 'package:pro_capcut/presentation/widgets/timeline_area.dart';
+import 'package:pro_capcut/utils/thumbnail_utils.dart';
 import 'package:video_player/video_player.dart';
+import 'package:just_audio/just_audio.dart';
 
 class EditorScreen extends StatelessWidget {
   final Project project;
@@ -41,51 +44,96 @@ class EditorView extends StatefulWidget {
 class _EditorViewState extends State<EditorView> {
   Map<String, VideoPlayerController> _controllers = {};
   VideoPlayerController? _activeController;
-  int _currentClipIndex = 0;
-  StreamSubscription<Duration?>? _positionSubscription;
+  Map<String, AudioPlayer> _audioPlayers = {};
 
+  int _currentClipIndex = 0;
+  StreamSubscription<void>? _positionSubscription; // Changed to void
+  EditorLoaded? _latestLoadedState;
+
+  List<VideoClip> _lastKnownClips = [];
+  List<AudioClip> _lastKnownAudioClips = [];
+
+  bool _wasPlayingBeforeDrag = false;
   EditorToolbar _currentToolbar = EditorToolbar.main;
   int _selectedToolIndex = 0;
-  bool _wasPlayingBeforeDrag = false;
-  List<VideoClip> _lastKnownClips = [];
-  EditorLoaded? _latestLoadedState;
 
   @override
   void dispose() {
     _positionSubscription?.cancel();
-    for (var controller in _controllers.values) {
-      controller.dispose();
-    }
-    _controllers.clear();
+    _controllers.values.forEach((controller) => controller.dispose());
+    _audioPlayers.values.forEach((player) => player.dispose());
     super.dispose();
   }
 
   Future<bool> _onWillPop() async {
-    // Use the state variable, NOT context.read(). This ensures we have the final edited state.
     if (_latestLoadedState != null) {
       final currentState = _latestLoadedState!;
+      String? newThumbnailPath;
+
+      // ✨ FIX: Thumbnail regeneration logic
+      if (currentState.currentClips.isNotEmpty) {
+        final firstClipPath = currentState.currentClips.first.sourcePath;
+
+        // 1. Delete the old thumbnail to prevent cluttering the cache.
+        await ThumbnailUtils.deleteThumbnail(widget.project.thumbnailPath);
+
+        // 2. Generate a new one from the current first clip.
+        newThumbnailPath = await ThumbnailUtils.generateAndSaveThumbnail(
+          firstClipPath,
+          currentState.projectId,
+        );
+      } else {
+        // If there are no clips left, just delete the old thumbnail.
+        await ThumbnailUtils.deleteThumbnail(widget.project.thumbnailPath);
+        newThumbnailPath = null;
+      }
+
       final updatedProject = Project(
         id: currentState.projectId,
         lastModified: DateTime.now(),
-        // This now correctly references the final, edited list of clips.
         videoClips: currentState.currentClips,
         audioClips: currentState.audioClips,
-        // This correctly preserves the thumbnail path from the original project.
-        thumbnailPath: widget.project.thumbnailPath,
+        // 3. Save the project with the new thumbnail path.
+        thumbnailPath: newThumbnailPath,
       );
 
       final projectsBox = Hive.box<Project>('projects');
       await projectsBox.put(updatedProject.id, updatedProject);
 
       if (mounted) {
-        Fluttertoast.showToast(
-          msg: "Project Saved",
-          toastLength: Toast.LENGTH_SHORT,
-          gravity: ToastGravity.CENTER,
-        );
+        Fluttertoast.showToast(msg: "Project Saved");
       }
     }
-    return true; // Allows the screen to pop
+    return true;
+  }
+
+  Future<void> _updateAudioPlayers(List<AudioClip> audioClips) async {
+    if (!mounted) return;
+
+    final newClipIds = audioClips.map((c) => c.uniqueId).toSet();
+    final oldClipIds = _audioPlayers.keys.toSet();
+
+    // Remove players for clips that no longer exist
+    final clipsToRemove = oldClipIds.difference(newClipIds);
+    for (final clipId in clipsToRemove) {
+      await _audioPlayers[clipId]?.dispose();
+      _audioPlayers.remove(clipId);
+    }
+
+    // Add players for new clips
+    for (final clip in audioClips) {
+      if (!_audioPlayers.containsKey(clip.uniqueId)) {
+        final player = AudioPlayer();
+        try {
+          await player.setFilePath(clip.filePath);
+          _audioPlayers[clip.uniqueId] = player;
+        } catch (e) {
+          print("Error setting up audio player for ${clip.filePath}: $e");
+          player.dispose();
+        }
+      }
+    }
+    _lastKnownAudioClips = List.from(audioClips);
   }
 
   void _onClipsChanged(List<VideoClip> newClips) {
@@ -148,6 +196,7 @@ class _EditorViewState extends State<EditorView> {
 
     if (controller != null && controller.value.isInitialized) {
       controller.setPlaybackSpeed(clip.speed);
+      controller.setVolume(clip.volume);
     }
 
     if (controller != _activeController) {
@@ -163,14 +212,12 @@ class _EditorViewState extends State<EditorView> {
   }
 
   void _play() {
-    final editorState = context.read<EditorBloc>().state;
-    if (editorState is! EditorLoaded || _activeController == null) return;
+    final editorState = _latestLoadedState;
+    if (editorState == null || _activeController == null) return;
 
-    final clips = editorState.currentClips;
-    if (_currentClipIndex >= clips.length) return;
-
-    final activeClip = clips[_currentClipIndex];
+    final activeClip = editorState.currentClips[_currentClipIndex];
     _activeController!.setPlaybackSpeed(activeClip.speed);
+    _activeController!.setVolume(activeClip.volume);
     _activeController!.play();
 
     context.read<EditorBloc>().add(const PlaybackStatusChanged(true));
@@ -179,13 +226,14 @@ class _EditorViewState extends State<EditorView> {
     _positionSubscription = _activeController!.position.asStream().listen((
       position,
     ) {
-      if (!mounted || position == null) return;
+      if (!mounted || position == null || _latestLoadedState == null) return;
 
-      final currentState = context.read<EditorBloc>().state as EditorLoaded;
+      // --- Conductor Logic Starts Here ---
+      final currentState = _latestLoadedState!;
       final currentClips = currentState.currentClips;
       if (_currentClipIndex >= currentClips.length) return;
-      final activeClip = currentClips[_currentClipIndex];
 
+      final activeClip = currentClips[_currentClipIndex];
       Duration globalPosition = Duration.zero;
       for (int i = 0; i < _currentClipIndex; i++) {
         globalPosition += currentClips[i].duration;
@@ -195,15 +243,40 @@ class _EditorViewState extends State<EditorView> {
         microseconds: (timeInClip.inMicroseconds / activeClip.speed).round(),
       );
 
+      // Update the BLoC with the new global position
       context.read<EditorBloc>().add(
         VideoPositionChanged(globalPosition, currentState.videoDuration),
       );
 
+      // ✨ FIX: This is the new "conductor" logic.
+      // It checks every audio clip on every tick of the video player's clock.
+      for (final audioClip in currentState.audioClips) {
+        final player = _audioPlayers[audioClip.uniqueId];
+        if (player == null) continue;
+
+        final clipStart = audioClip.startTimeInTimeline;
+        final clipEnd = clipStart + audioClip.duration;
+        final isWithinBounds =
+            globalPosition >= clipStart && globalPosition < clipEnd;
+
+        // If it should be playing but isn't, start it from the correct spot.
+        if (isWithinBounds && !player.playing) {
+          player.setVolume(audioClip.volume); // Set volume for the audio clip
+          player.seek(globalPosition - clipStart);
+          player.play();
+        }
+        // If it shouldn't be playing but is, stop it.
+        else if (!isWithinBounds && player.playing) {
+          player.pause();
+        }
+      }
+
+      // Check if the main video clip has ended
       if (position >= activeClip.endTimeInSource) {
         final nextClipIndex = _currentClipIndex + 1;
         if (nextClipIndex < currentClips.length) {
           _setActiveClip(nextClipIndex, currentClips, seekToStart: true);
-          _play();
+          _play(); // Recursively call play for the next clip
         } else {
           _pause();
           _setActiveClip(0, currentClips, seekToStart: true);
@@ -214,6 +287,12 @@ class _EditorViewState extends State<EditorView> {
 
   void _pause() {
     _activeController?.pause();
+
+    // ✨ FIX: Also pause all the audio players.
+    for (var player in _audioPlayers.values) {
+      player.pause();
+    }
+
     _positionSubscription?.cancel();
     context.read<EditorBloc>().add(const PlaybackStatusChanged(false));
   }
@@ -227,14 +306,33 @@ class _EditorViewState extends State<EditorView> {
   }
 
   void _onTimelineScrolled(Duration newPosition) {
-    final editorState = context.read<EditorBloc>().state;
-    if (editorState is! EditorLoaded) return;
-    final clips = editorState.currentClips;
+    final editorState = _latestLoadedState;
+    if (editorState == null) return;
 
     context.read<EditorBloc>().add(
       VideoPositionChanged(newPosition, editorState.videoDuration),
     );
-    _updateActiveClipForPosition(newPosition, clips, seek: true);
+    _updateActiveClipForPosition(
+      newPosition,
+      editorState.currentClips,
+      seek: true,
+    );
+
+    // ✨ FIX: When scrubbing, correctly seek or stop audio players.
+    for (final audioClip in editorState.audioClips) {
+      final player = _audioPlayers[audioClip.uniqueId];
+      if (player == null) continue;
+
+      final seekPosition = newPosition - audioClip.startTimeInTimeline;
+
+      if (seekPosition >= Duration.zero && seekPosition < audioClip.duration) {
+        player.seek(seekPosition);
+      } else {
+        // If scrubbing outside the clip, ensure it's paused and reset.
+        player.pause();
+        player.seek(Duration.zero);
+      }
+    }
   }
 
   void _updateActiveClipForPosition(
@@ -282,6 +380,10 @@ class _EditorViewState extends State<EditorView> {
 
             _onClipsChanged(state.currentClips);
 
+            // ✨ ADD: Check if the audio clips have changed and update players if they have.
+            if (!listEquals(_lastKnownAudioClips, state.audioClips)) {
+              _updateAudioPlayers(state.audioClips);
+            }
             if (state.selectedClipIndex != null &&
                 _currentToolbar != EditorToolbar.edit) {
               setState(() => _currentToolbar = EditorToolbar.edit);

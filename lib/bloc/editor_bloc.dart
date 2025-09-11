@@ -37,6 +37,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<ClipTrimmed>(_onClipTrimmed);
     on<ClipTrimEnded>(_onClipTrimEnded);
     on<AudioExtractedAndAdded>(_onAudioExtractedAndAdded);
+    on<ClipVolumeChanged>(_onClipVolumeChanged);
   }
 
   void _addHistory(
@@ -68,6 +69,27 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         videoDuration: newTotalDuration,
       ),
     );
+  }
+
+  void _onClipVolumeChanged(
+    ClipVolumeChanged event,
+    Emitter<EditorState> emit,
+  ) {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+    if (currentState.selectedClipIndex == null) return;
+
+    final clipIndex = currentState.selectedClipIndex!;
+    final clipToChange = currentState.currentClips[clipIndex];
+
+    // Create a new clip instance with the updated volume
+    final newClip = clipToChange.copyWith(volume: event.newVolume);
+
+    final newClips = List<VideoClip>.from(currentState.currentClips);
+    newClips[clipIndex] = newClip;
+
+    // Use the existing _addHistory method to save the change to the undo/redo stack
+    _addHistory(currentState, newClips, emit);
   }
 
   void _onProjectLoaded(EditorProjectLoaded event, Emitter<EditorState> emit) {
@@ -328,16 +350,18 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     // --- END CORRECTION ---
 
     // 1. Process and concatenate video clips
+
     final videoStreams = StringBuffer();
     final baseAudioStreams = StringBuffer();
     for (int i = 0; i < currentState.currentClips.length; i++) {
       final clip = currentState.currentClips[i];
       final inputIndex = videoMap[clip.playablePath]!;
       filterComplex.write(
-        '[${inputIndex}:v]trim=start=${clip.startTimeInSource.inSeconds}.${clip.startTimeInSource.inMilliseconds.remainder(1000)}:end=${clip.endTimeInSource.inSeconds}.${clip.endTimeInSource.inMilliseconds.remainder(1000)},setpts=PTS-STARTPTS[v$i];',
+        '[$inputIndex:v]trim=start=${clip.startTimeInSource.inSeconds}.${clip.startTimeInSource.inMilliseconds.remainder(1000)}:end=${clip.endTimeInSource.inSeconds}.${clip.endTimeInSource.inMilliseconds.remainder(1000)},setpts=PTS-STARTPTS[v$i];',
       );
+
       filterComplex.write(
-        '[${inputIndex}:a]atrim=start=${clip.startTimeInSource.inSeconds}.${clip.startTimeInSource.inMilliseconds.remainder(1000)}:end=${clip.endTimeInSource.inSeconds}.${clip.endTimeInSource.inMilliseconds.remainder(1000)},asetpts=PTS-STARTPTS[a$i];',
+        '[${inputIndex}:a]atrim=start=${clip.startTimeInSource.inSeconds}.${clip.startTimeInSource.inMilliseconds.remainder(1000)}:end=${clip.endTimeInSource.inSeconds}.${clip.endTimeInSource.inMilliseconds.remainder(1000)},asetpts=PTS-STARTPTS,volume=${clip.volume}[a$i];',
       );
 
       videoStreams.write('[v$i]');
@@ -356,8 +380,10 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
       final audioClip = currentState.audioClips[i];
       final inputIndex = audioMap[audioClip.filePath]!;
       final delayMs = audioClip.startTimeInTimeline.inMilliseconds;
+
+      // ✨ FIX: Add the ",volume=${audioClip.volume}" filter to the additional audio streams.
       filterComplex.write(
-        '[$inputIndex:a]adelay=${delayMs}|${delayMs}[aud$i];',
+        '[$inputIndex:a]adelay=${delayMs}|${delayMs},volume=${audioClip.volume}[aud$i];',
       );
       mixStreams.write('[aud$i]');
     }
@@ -473,17 +499,22 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
   ) async {
     if (state is! EditorLoaded) return;
     final currentState = state as EditorLoaded;
-    // ... you can add a processing state emit here if you wish
+    // It's good practice to show the user something is happening.
+    emit(currentState.copyWith(isPlaying: false)); // Pauses playback
 
     try {
       final Directory appDirectory = await getApplicationDocumentsDirectory();
       final String outputPath =
           '${appDirectory.path}/extracted_audio_${const Uuid().v4()}.m4a';
+
+      // ✨ FIX: Change the audio codec flag from 'aac' to 'copy'.
       final command =
-          '-i "${event.videoFile.path}" -vn -c:a aac -y "$outputPath"';
+          '-i "${event.videoFile.path}" -vn -c:a copy -y "$outputPath"';
 
       final session = await FFmpegKit.execute(command);
-      if (ReturnCode.isSuccess(await session.getReturnCode())) {
+      final returnCode = await session.getReturnCode();
+
+      if (ReturnCode.isSuccess(returnCode)) {
         final info = await FFprobeKit.getMediaInformation(outputPath);
         final durationMs =
             (double.tryParse(
@@ -496,7 +527,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         final newAudioClip = AudioClip(
           filePath: outputPath,
           uniqueId: const Uuid().v4(),
-          // Use the corrected parameter names that match the fields
           durationInMicroseconds: audioDuration.inMicroseconds,
           startTimeInTimelineInMicroseconds:
               currentState.videoPosition.inMicroseconds,
@@ -504,14 +534,17 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
 
         final newAudioClips = List<AudioClip>.from(currentState.audioClips)
           ..add(newAudioClip);
-        emit(
-          currentState.copyWith(audioClips: newAudioClips, isPlaying: false),
-        );
+
+        emit(currentState.copyWith(audioClips: newAudioClips));
       } else {
-        throw Exception("FFmpeg failed to extract audio.");
+        // ✨ BEST PRACTICE: Print the full FFmpeg logs on failure.
+        print('FFmpeg failed to extract audio. Return code: $returnCode');
+        print('FFmpeg logs: ${await session.getLogsAsString()}');
+        // Optionally, show an error message to the user here.
       }
     } catch (e) {
       print("Error extracting audio: $e");
+      // Re-emit the original state to clear any loading indicators.
       emit(currentState.copyWith());
     }
   }
