@@ -1,4 +1,3 @@
-// lib/bloc/editor_bloc.dart
 import 'dart:async';
 import 'dart:io';
 import 'package:bloc/bloc.dart';
@@ -7,19 +6,22 @@ import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:gal/gal.dart';
+import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pro_capcut/domain/models/audio_clip.dart';
 import 'package:pro_capcut/domain/models/project.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:pro_capcut/presentation/widgets/export_options_sheet.dart';
+import 'package:pro_capcut/utils/thumbnail_utils.dart';
 import 'package:uuid/uuid.dart';
+import 'package:pro_capcut/utils/ffmpeg_command_builder.dart';
 
 part 'editor_event.dart';
 part 'editor_state.dart';
 
 class EditorBloc extends Bloc<EditorEvent, EditorState> {
   EditorBloc() : super(EditorInitial()) {
-    on<EditorProjectLoaded>(_onProjectLoaded); // UPDATED
+    on<EditorProjectLoaded>(_onProjectLoaded);
     on<ClipAdded>(_onClipAdded);
     on<StabilizationStarted>(_onStabilizationStarted);
     on<UndoRequested>(_onUndoRequested);
@@ -38,6 +40,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<ClipTrimEnded>(_onClipTrimEnded);
     on<AudioExtractedAndAdded>(_onAudioExtractedAndAdded);
     on<ClipVolumeChanged>(_onClipVolumeChanged);
+    on<EditorProjectSaved>(_onProjectSaved);
   }
 
   void _addHistory(
@@ -319,92 +322,29 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     final String outputPath =
         '${appDirectory.path}/exported_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-    // --- Building the command ---
-    final inputs = <String>[];
+    // --- NEW: Using the Command Builder ---
+    final builder = FFmpegCommandBuilder();
+
+    // 1. Add all unique media files as inputs
     final videoPaths = currentState.currentClips
         .map((c) => c.playablePath)
         .toSet();
     final audioPaths = currentState.audioClips.map((c) => c.filePath).toSet();
 
     for (final path in videoPaths) {
-      inputs.add('-i "$path"');
+      builder.addVideoInput(path);
     }
     for (final path in audioPaths) {
-      inputs.add('-i "$path"');
+      builder.addAudioInput(path);
     }
 
-    final filterComplex = StringBuffer();
+    // 2. Process clips to build the filter graph
+    builder.processVideoClips(currentState.currentClips);
+    builder.processAudioClips(currentState.audioClips);
+    builder.applyOutputSettings(event.settings);
 
-    // --- THIS IS THE CORRECTED PART ---
-    final videoPathList = videoPaths.toList();
-    final audioPathList = audioPaths.toList();
-
-    // Create a map from the file path to its input index (e.g., {"/path/to/vid.mp4": 0})
-    final videoMap = {
-      for (int i = 0; i < videoPathList.length; i++) videoPathList[i]: i,
-    };
-    final audioMap = {
-      for (int i = 0; i < audioPathList.length; i++)
-        audioPathList[i]: i + videoPathList.length,
-    };
-    // --- END CORRECTION ---
-
-    // 1. Process and concatenate video clips
-
-    final videoStreams = StringBuffer();
-    final baseAudioStreams = StringBuffer();
-    for (int i = 0; i < currentState.currentClips.length; i++) {
-      final clip = currentState.currentClips[i];
-      final inputIndex = videoMap[clip.playablePath]!;
-      filterComplex.write(
-        '[$inputIndex:v]trim=start=${clip.startTimeInSource.inSeconds}.${clip.startTimeInSource.inMilliseconds.remainder(1000)}:end=${clip.endTimeInSource.inSeconds}.${clip.endTimeInSource.inMilliseconds.remainder(1000)},setpts=PTS-STARTPTS[v$i];',
-      );
-
-      filterComplex.write(
-        '[${inputIndex}:a]atrim=start=${clip.startTimeInSource.inSeconds}.${clip.startTimeInSource.inMilliseconds.remainder(1000)}:end=${clip.endTimeInSource.inSeconds}.${clip.endTimeInSource.inMilliseconds.remainder(1000)},asetpts=PTS-STARTPTS,volume=${clip.volume}[a$i];',
-      );
-
-      videoStreams.write('[v$i]');
-      baseAudioStreams.write('[a$i]');
-    }
-    filterComplex.write(
-      '${videoStreams}concat=n=${currentState.currentClips.length}:v=1:a=0[vid_out];',
-    );
-    filterComplex.write(
-      '${baseAudioStreams}concat=n=${currentState.currentClips.length}:v=0:a=1[base_audio];',
-    );
-
-    // 2. Process and mix additional audio clips
-    final mixStreams = StringBuffer('[base_audio]');
-    for (int i = 0; i < currentState.audioClips.length; i++) {
-      final audioClip = currentState.audioClips[i];
-      final inputIndex = audioMap[audioClip.filePath]!;
-      final delayMs = audioClip.startTimeInTimeline.inMilliseconds;
-
-      // ✨ FIX: Add the ",volume=${audioClip.volume}" filter to the additional audio streams.
-      filterComplex.write(
-        '[$inputIndex:a]adelay=${delayMs}|${delayMs},volume=${audioClip.volume}[aud$i];',
-      );
-      mixStreams.write('[aud$i]');
-    }
-    final totalAudioInputs = currentState.audioClips.length + 1;
-    filterComplex.write(
-      '${mixStreams}amix=inputs=$totalAudioInputs[final_audio];',
-    );
-
-    // 3. Apply export settings
-    final resolution = event.settings.resolution;
-    final frameRate = event.settings.frameRate;
-    final bitrate = (event.settings.codeRate == 0)
-        ? "5M"
-        : (event.settings.codeRate == 1 ? "10M" : "15M");
-
-    filterComplex.write(
-      '[vid_out]scale=-2:$resolution,fps=$frameRate[final_video];',
-    );
-
-    final command =
-        '${inputs.join(' ')} -filter_complex "${filterComplex.toString()}" -map "[final_video]" -map "[final_audio]" -c:v libx264 -preset veryfast -b:v $bitrate -c:a aac -y "$outputPath"';
+    // 3. Build the final command string
+    final command = builder.build(outputPath);
 
     FFmpegKit.executeAsync(
       command,
@@ -472,8 +412,9 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
 
     // Boundary checks
     if (updatedStart < Duration.zero) updatedStart = Duration.zero;
-    if (updatedEnd > clipToTrim.sourceDuration)
+    if (updatedEnd > clipToTrim.sourceDuration) {
       updatedEnd = clipToTrim.sourceDuration;
+    }
     if (updatedEnd - updatedStart < const Duration(milliseconds: 100)) {
       if (event.newStart != null) {
         updatedStart = updatedEnd - const Duration(milliseconds: 100);
@@ -547,5 +488,47 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
       // Re-emit the original state to clear any loading indicators.
       emit(currentState.copyWith());
     }
+  }
+
+  Future<void> _onProjectSaved(
+    EditorProjectSaved event,
+    Emitter<EditorState> emit,
+  ) async {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+
+    // --- All the logic below is MOVED from _onWillPop ---
+
+    final projectsBox = Hive.box<Project>('projects');
+    final projectToUpdate = projectsBox.get(currentState.projectId);
+
+    if (projectToUpdate == null) return; // Safety check
+
+    String? newThumbnailPath = projectToUpdate.thumbnailPath;
+
+    if (currentState.currentClips.isNotEmpty) {
+      final firstClipPath = currentState.currentClips.first.sourcePath;
+      // Delete old thumbnail if it exists and is different from what we might generate
+      await ThumbnailUtils.deleteThumbnail(projectToUpdate.thumbnailPath);
+      // Generate a new one
+      newThumbnailPath = await ThumbnailUtils.generateAndSaveThumbnail(
+        firstClipPath,
+        currentState.projectId,
+      );
+    } else {
+      // No clips left, so delete the old thumbnail
+      await ThumbnailUtils.deleteThumbnail(projectToUpdate.thumbnailPath);
+      newThumbnailPath = null;
+    }
+
+    final updatedProject = Project(
+      id: currentState.projectId,
+      lastModified: DateTime.now(),
+      videoClips: currentState.currentClips,
+      audioClips: currentState.audioClips,
+      thumbnailPath: newThumbnailPath,
+    );
+
+    await projectsBox.put(updatedProject.id, updatedProject);
   }
 }

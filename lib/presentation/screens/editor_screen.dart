@@ -44,7 +44,7 @@ class EditorView extends StatefulWidget {
 class _EditorViewState extends State<EditorView> {
   Map<String, VideoPlayerController> _controllers = {};
   VideoPlayerController? _activeController;
-  Map<String, AudioPlayer> _audioPlayers = {};
+  final Map<String, AudioPlayer> _audioPlayers = {};
 
   int _currentClipIndex = 0;
   StreamSubscription<void>? _positionSubscription; // Changed to void
@@ -60,50 +60,21 @@ class _EditorViewState extends State<EditorView> {
   @override
   void dispose() {
     _positionSubscription?.cancel();
-    _controllers.values.forEach((controller) => controller.dispose());
-    _audioPlayers.values.forEach((player) => player.dispose());
+    for (var controller in _controllers.values) {
+      controller.dispose();
+    }
+    for (var player in _audioPlayers.values) {
+      player.dispose();
+    }
     super.dispose();
   }
 
   Future<bool> _onWillPop() async {
-    if (_latestLoadedState != null) {
-      final currentState = _latestLoadedState!;
-      String? newThumbnailPath;
-
-      // ✨ FIX: Thumbnail regeneration logic
-      if (currentState.currentClips.isNotEmpty) {
-        final firstClipPath = currentState.currentClips.first.sourcePath;
-
-        // 1. Delete the old thumbnail to prevent cluttering the cache.
-        await ThumbnailUtils.deleteThumbnail(widget.project.thumbnailPath);
-
-        // 2. Generate a new one from the current first clip.
-        newThumbnailPath = await ThumbnailUtils.generateAndSaveThumbnail(
-          firstClipPath,
-          currentState.projectId,
-        );
-      } else {
-        // If there are no clips left, just delete the old thumbnail.
-        await ThumbnailUtils.deleteThumbnail(widget.project.thumbnailPath);
-        newThumbnailPath = null;
-      }
-
-      final updatedProject = Project(
-        id: currentState.projectId,
-        lastModified: DateTime.now(),
-        videoClips: currentState.currentClips,
-        audioClips: currentState.audioClips,
-        // 3. Save the project with the new thumbnail path.
-        thumbnailPath: newThumbnailPath,
-      );
-
-      final projectsBox = Hive.box<Project>('projects');
-      await projectsBox.put(updatedProject.id, updatedProject);
-
-      if (mounted) {
-        Fluttertoast.showToast(msg: "Project Saved");
-      }
+    // If the state is loaded, add the event to save the project.
+    if (context.read<EditorBloc>().state is EditorLoaded) {
+      context.read<EditorBloc>().add(EditorProjectSaved());
     }
+    // Always allow the user to pop the screen.
     return true;
   }
 

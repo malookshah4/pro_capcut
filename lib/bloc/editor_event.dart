@@ -113,3 +113,5 @@ class ClipVolumeChanged extends EditorEvent {
   @override
   List<Object> get props => [newVolume];
 }
+
+class EditorProjectSaved extends EditorEvent {}
