@@ -6,8 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
-import 'package:pro_capcut/presentation/widgets/speed_control_sheet.dart';
-import 'package:pro_capcut/presentation/widgets/volume_control_sheet.dart';
 
 enum EditorToolbar { main, audio, edit }
 
@@ -49,7 +47,21 @@ class MainToolbar extends StatelessWidget {
 
 // The Edit Toolbar Widget
 class EditToolbar extends StatelessWidget {
-  const EditToolbar({super.key});
+  // NEW: Callbacks for each button press
+  final VoidCallback onBack;
+  final VoidCallback onSplit;
+  final VoidCallback onSpeed;
+  final VoidCallback onVolume;
+  final VoidCallback onDelete;
+
+  const EditToolbar({
+    super.key,
+    required this.onBack,
+    required this.onSplit,
+    required this.onSpeed,
+    required this.onVolume,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -66,8 +78,8 @@ class EditToolbar extends StatelessWidget {
                 color: Colors.white,
                 size: 20,
               ),
-              onPressed: () =>
-                  context.read<EditorBloc>().add(const ClipTapped(null)),
+              // Use the onBack callback
+              onPressed: onBack,
             ),
             const VerticalDivider(
               color: Colors.white30,
@@ -82,91 +94,26 @@ class EditToolbar extends StatelessWidget {
                   _buildToolbarItem(
                     icon: Icons.cut,
                     label: 'Split',
-                    onTap: () {
-                      final editorBloc = context.read<EditorBloc>();
-                      final currentState = editorBloc.state;
-                      if (currentState is EditorLoaded &&
-                          currentState.selectedClipIndex != null) {
-                        editorBloc.add(
-                          ClipSplitRequested(
-                            clipIndex: currentState.selectedClipIndex!,
-                            splitAt: currentState.videoPosition,
-                          ),
-                        );
-                      }
-                    },
+                    // Use the onSplit callback
+                    onTap: onSplit,
                   ),
                   _buildToolbarItem(
                     icon: Icons.speed,
                     label: 'Speed',
-                    onTap: () {
-                      final editorBloc = context.read<EditorBloc>();
-                      final currentState = editorBloc.state;
-                      if (currentState is EditorLoaded &&
-                          currentState.selectedClipIndex != null) {
-                        final selectedClip = currentState
-                            .currentClips[currentState.selectedClipIndex!];
-
-                        // This is the logic to show the bottom sheet
-                        showModalBottomSheet<double>(
-                          context: context,
-                          backgroundColor: Colors.transparent,
-                          builder: (ctx) => SpeedControlSheet(
-                            initialSpeed: selectedClip.speed,
-                            // Pass the original duration before speed adjustment
-                            originalDuration: Duration(
-                              microseconds:
-                                  (selectedClip.duration.inMicroseconds *
-                                          selectedClip.speed)
-                                      .round(),
-                            ),
-                          ),
-                        ).then((newSpeed) {
-                          if (newSpeed != null) {
-                            editorBloc.add(ClipSpeedChanged(newSpeed));
-                          }
-                        });
-                      }
-                    },
+                    // Use the onSpeed callback
+                    onTap: onSpeed,
                   ),
                   _buildToolbarItem(
                     icon: Icons.volume_up_outlined,
                     label: 'Volume',
-                    onTap: () {
-                      final editorBloc = context.read<EditorBloc>();
-                      final currentState = editorBloc.state;
-                      if (currentState is EditorLoaded &&
-                          currentState.selectedClipIndex != null) {
-                        final selectedClip = currentState
-                            .currentClips[currentState.selectedClipIndex!];
-
-                        showModalBottomSheet<void>(
-                          context: context,
-                          backgroundColor: Colors.transparent,
-                          builder: (ctx) {
-                            return BlocProvider.value(
-                              value: editorBloc,
-                              child: VolumeControlSheet(
-                                initialVolume: selectedClip.volume,
-                              ),
-                            );
-                          },
-                        );
-                      }
-                    },
+                    // Use the onVolume callback
+                    onTap: onVolume,
                   ),
                   _buildToolbarItem(
                     icon: Icons.delete_outline,
                     label: 'Delete',
-                    onTap: () {
-                      final editorBloc = context.read<EditorBloc>();
-                      final currentState = editorBloc.state;
-                      // Check that the state is loaded AND a clip is selected.
-                      if (currentState is EditorLoaded &&
-                          currentState.selectedClipIndex != null) {
-                        editorBloc.add(ClipDeleted());
-                      }
-                    },
+                    // Use the onDelete callback
+                    onTap: onDelete,
                   ),
                 ],
               ),

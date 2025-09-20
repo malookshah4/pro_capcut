@@ -286,4 +286,25 @@ class PlaybackCoordinator extends ChangeNotifier {
     _setActiveClip(_currentClips.length - 1, seekToStart: false);
     activeController.value?.seekTo(_currentClips.last.endTimeInSource);
   }
+
+  // This is used for live previewing the trim handles.
+  void seekToClipEdge({
+    required int clipIndex,
+    required Duration positionInSource,
+  }) {
+    if (_isDisposed || clipIndex >= _currentClips.length) return;
+
+    pause(); // Ensure we are paused for the preview
+
+    final clip = _currentClips[clipIndex];
+    final controller = _videoControllers[clip.playablePath];
+
+    // If the controller for the clip being trimmed isn't the active one, switch it.
+    if (controller != null && activeController.value != controller) {
+      activeController.value = controller;
+    }
+
+    // Seek the controller to the exact frame.
+    activeController.value?.seekTo(positionInSource);
+  }
 }

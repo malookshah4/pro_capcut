@@ -5,6 +5,8 @@ import 'package:equatable/equatable.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
+import 'package:flutter/material.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 import 'package:gal/gal.dart';
 import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
@@ -530,5 +532,13 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     );
 
     await projectsBox.put(updatedProject.id, updatedProject);
+
+    Fluttertoast.showToast(
+      msg: "Project Saved",
+      toastLength: Toast.LENGTH_SHORT,
+      gravity: ToastGravity.CENTER,
+      textColor: Colors.white,
+      fontSize: 16.0,
+    );
   }
 }
