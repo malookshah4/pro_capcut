@@ -79,7 +79,7 @@ Clone the repository:
 
 Bash
 
-git clone https://github.com/YourUsername/FreeCut.git
+git clone https://github.com/malookshah4/pro_capcut.git
 Navigate to the project directory:
 
 Bash
