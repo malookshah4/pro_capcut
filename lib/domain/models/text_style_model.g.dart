@@ -1,41 +1,44 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'project.dart';
+part of 'text_style_model.dart';
 
 // **************************************************************************
 // TypeAdapterGenerator
 // **************************************************************************
 
-class ProjectAdapter extends TypeAdapter<Project> {
+class TextStyleModelAdapter extends TypeAdapter<TextStyleModel> {
   @override
-  final int typeId = 0;
+  final int typeId = 7;
 
   @override
-  Project read(BinaryReader reader) {
+  TextStyleModel read(BinaryReader reader) {
     final numOfFields = reader.readByte();
     final fields = <int, dynamic>{
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
-    return Project(
-      id: fields[0] as String,
-      lastModified: fields[1] as DateTime,
-      tracks: (fields[2] as List).cast<EditorTrack>(),
-      thumbnailPath: fields[3] as String?,
+    return TextStyleModel(
+      fontName: fields[0] as String,
+      fontSize: fields[1] as double,
+      primaryColor: fields[2] as int,
+      strokeColor: fields[3] as int,
+      strokeWidth: fields[4] as double,
     );
   }
 
   @override
-  void write(BinaryWriter writer, Project obj) {
+  void write(BinaryWriter writer, TextStyleModel obj) {
     writer
-      ..writeByte(4)
+      ..writeByte(5)
       ..writeByte(0)
-      ..write(obj.id)
+      ..write(obj.fontName)
       ..writeByte(1)
-      ..write(obj.lastModified)
+      ..write(obj.fontSize)
       ..writeByte(2)
-      ..write(obj.tracks)
+      ..write(obj.primaryColor)
       ..writeByte(3)
-      ..write(obj.thumbnailPath);
+      ..write(obj.strokeColor)
+      ..writeByte(4)
+      ..write(obj.strokeWidth);
   }
 
   @override
@@ -44,7 +47,7 @@ class ProjectAdapter extends TypeAdapter<Project> {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ProjectAdapter &&
+      other is TextStyleModelAdapter &&
           runtimeType == other.runtimeType &&
           typeId == other.typeId;
 }

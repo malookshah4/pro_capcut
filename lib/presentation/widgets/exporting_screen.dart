@@ -4,8 +4,8 @@ import 'package:pro_capcut/bloc/editor_bloc.dart';
 import 'package:video_player/video_player.dart';
 
 class ExportingScreen extends StatelessWidget {
-  final EditorProcessing processingState;
-  final VideoPlayerController? previewController; // To show a preview
+  final EditorLoaded processingState; // <-- CHANGED
+  final VideoPlayerController? previewController;
 
   const ExportingScreen({
     super.key,
@@ -15,8 +15,8 @@ class ExportingScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final progressPercent = (processingState.progress * 100).toStringAsFixed(1);
-
+    final progressPercent = (processingState.processingProgress * 100)
+        .toStringAsFixed(1); // <-- CHANGED
     return Scaffold(
       backgroundColor: Colors.black,
       body: Center(
@@ -38,7 +38,6 @@ class ExportingScreen extends StatelessWidget {
               style: TextStyle(color: Colors.white70, fontSize: 14),
             ),
             const SizedBox(height: 40),
-            // Video Preview Container
             Container(
               width: MediaQuery.of(context).size.width * 0.6,
               height: MediaQuery.of(context).size.height * 0.4,
@@ -62,9 +61,7 @@ class ExportingScreen extends StatelessWidget {
                           child: VideoPlayer(previewController!),
                         ),
                       ),
-                    // Dimming overlay
                     Container(color: Colors.black.withOpacity(0.4)),
-                    // Percentage Text
                     Text(
                       '$progressPercent%',
                       style: const TextStyle(
@@ -76,13 +73,13 @@ class ExportingScreen extends StatelessWidget {
                         ],
                       ),
                     ),
-                    // Progress bar at the top of the preview
                     Positioned(
                       top: 0,
                       left: 0,
                       right: 0,
                       child: LinearProgressIndicator(
-                        value: processingState.progress,
+                        value:
+                            processingState.processingProgress, // <-- CHANGED
                         backgroundColor: Colors.white24,
                         valueColor: const AlwaysStoppedAnimation<Color>(
                           Colors.white,

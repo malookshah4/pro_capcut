@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:pro_capcut/bloc/editor_bloc.dart';
 
 class VolumeControlSheet extends StatefulWidget {
   final double initialVolume;
@@ -63,7 +61,9 @@ class _VolumeControlSheetState extends State<VolumeControlSheet> {
             },
             // ✨ This is the best place to update the BLoC state
             onChangeEnd: (value) {
-              context.read<EditorBloc>().add(ClipVolumeChanged(value));
+              // TODO: Re-implement this in Phase 4 with new event
+              // context.read<EditorBloc>().add(ClipVolumeChanged(value));
+              print("Volume changed to $value");
             },
           ),
         ],

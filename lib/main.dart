@@ -1,13 +1,19 @@
+// lib/main.dart
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive_flutter/adapters.dart';
 import 'package:pro_capcut/bloc/projects_bloc.dart';
-import 'package:pro_capcut/domain/models/audio_clip.dart';
-import 'package:pro_capcut/domain/models/project.dart';
-import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:pro_capcut/presentation/screens/home_screen.dart';
+
+// --- Import ALL your models ---
+import 'package:pro_capcut/domain/models/project.dart';
+import 'package:pro_capcut/domain/models/editor_track.dart';
+import 'package:pro_capcut/domain/models/video_clip.dart';
+import 'package:pro_capcut/domain/models/audio_clip.dart';
+import 'package:pro_capcut/domain/models/text_clip.dart';
+import 'package:pro_capcut/domain/models/text_style_model.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,18 +33,24 @@ void main() async {
         flags: AndroidAudioFlags.none,
         usage: AndroidAudioUsage.media,
       ),
-      // This tells Android to let our app's audio play without pausing other audio.
       androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
     ),
   );
 
+  // --- Hive Setup with Unique TypeIds ---
   await Hive.initFlutter();
-  // Register all your models
-  Hive.registerAdapter(ProjectAdapter());
-  Hive.registerAdapter(VideoClipAdapter());
-  Hive.registerAdapter(AudioClipAdapter());
-  // Open the box (like a table) where projects will be stored
+
+  // Register adapters with UNIQUE typeIds
+  Hive.registerAdapter(ProjectAdapter()); // typeId: 0
+  Hive.registerAdapter(VideoClipAdapter()); // typeId: 1
+  Hive.registerAdapter(AudioClipAdapter()); // typeId: 2
+  Hive.registerAdapter(TextClipAdapter()); // typeId: 3
+  Hive.registerAdapter(EditorTrackAdapter()); // typeId: 4
+  Hive.registerAdapter(TextStyleModelAdapter()); // typeId: 6 (Cshanged from 3)
+  Hive.registerAdapter(TrackTypeAdapter());
+
   await Hive.openBox<Project>('projects');
+  // --- End of Hive setup ---
 
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -67,7 +79,7 @@ class MyApp extends StatelessWidget {
         theme: ThemeData.dark().copyWith(
           scaffoldBackgroundColor: const Color(0xFF121212),
         ),
-        home: HomeScreen(),
+        home: const HomeScreen(),
       ),
     );
   }

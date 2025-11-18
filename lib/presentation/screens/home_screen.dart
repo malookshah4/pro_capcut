@@ -1,3 +1,4 @@
+// lib/presentation/screens/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
@@ -10,11 +11,11 @@ import 'package:pro_capcut/presentation/screens/editor_screen.dart';
 import 'package:pro_capcut/presentation/widgets/project_card.dart';
 import 'package:pro_capcut/utils/thumbnail_utils.dart';
 import 'package:uuid/uuid.dart';
+// New imports
+import 'package:pro_capcut/domain/models/editor_track.dart';
 
-// ✨ FIX: Convert HomeScreen to a StatefulWidget
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -23,8 +24,6 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // ✨ FIX: Dispatch the initial LoadProjects event here.
-    // This ensures the widget is fully mounted before we ask for data.
     context.read<ProjectsBloc>().add(LoadProjects());
   }
 
@@ -32,22 +31,29 @@ class _HomeScreenState extends State<HomeScreen> {
     final ImagePicker picker = ImagePicker();
     final XFile? video = await picker.pickVideo(source: ImageSource.gallery);
 
-    if (video != null && context.mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (BuildContext context) {
-          return const PopScope(
-            canPop: false,
-            child: Center(child: CircularProgressIndicator()),
-          );
-        },
-      );
+    if (video == null || !context.mounted) return;
 
+    // Show the progress dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return const PopScope(
+          canPop: false,
+          child: Center(child: CircularProgressIndicator()),
+        );
+      },
+    );
+
+    // --- NEW: Error Handling Block ---
+    try {
       final projectId = const Uuid().v4();
+
+      // 1. Generate Thumbnail
       final String? thumbnailPath =
           await ThumbnailUtils.generateAndSaveThumbnail(video.path, projectId);
 
+      // 2. Get Video Info
       final info = await FFprobeKit.getMediaInformation(video.path);
       final durationMs =
           (double.tryParse(info.getMediaInformation()?.getDuration() ?? '0') ??
@@ -55,40 +61,65 @@ class _HomeScreenState extends State<HomeScreen> {
           1000;
       final totalDuration = Duration(milliseconds: durationMs.round());
 
+      // 3. Build New Data Models
       final initialClip = VideoClip(
+        id: const Uuid().v4(),
         sourcePath: video.path,
         sourceDurationInMicroseconds: totalDuration.inMicroseconds,
         startTimeInSourceInMicroseconds: 0,
         endTimeInSourceInMicroseconds: totalDuration.inMicroseconds,
-        uniqueId: const Uuid().v4(),
+        startTimeInTimelineInMicroseconds: 0,
+        durationInMicroseconds: totalDuration.inMicroseconds,
+      );
+
+      final mainVideoTrack = EditorTrack(
+        id: const Uuid().v4(),
+        type: TrackType.video,
+        clips: [initialClip], // This is now a List<dynamic>
       );
 
       final newProject = Project(
         id: projectId,
         lastModified: DateTime.now(),
-        videoClips: [initialClip],
-        audioClips: [],
+        tracks: [mainVideoTrack],
         thumbnailPath: thumbnailPath,
       );
 
+      // 4. Save to Hive (This is where it likely failed before)
       final projectsBox = Hive.box<Project>('projects');
       await projectsBox.put(newProject.id, newProject);
 
+      // 5. Success: Close dialog and open editor
       if (context.mounted) {
-        Navigator.pop(context); // Dismiss the loading indicator
+        Navigator.pop(context); // Dismiss loading
         await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => EditorScreen(project: newProject),
           ),
         );
-
-        // This refresh is now fine because the initial load is handled correctly.
         if (context.mounted) {
           context.read<ProjectsBloc>().add(LoadProjects());
         }
       }
+    } catch (e, stackTrace) {
+      // 6. Failure: Close dialog and show error
+      print("--- FAILED TO CREATE PROJECT ---");
+      print(e.toString());
+      print(stackTrace.toString());
+      print("---------------------------------");
+
+      if (context.mounted) {
+        Navigator.pop(context); // Dismiss loading
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Failed to create project: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
+    // --- END: Error Handling Block ---
   }
 
   @override
@@ -169,7 +200,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            _buildProjectsList(), // This remains the same
+            _buildProjectsList(),
             const Spacer(),
           ],
         ),
@@ -177,8 +208,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // NOTE: This _buildProjectsList widget using ValueListenableBuilder is
-  // the most robust way and should be kept.
   Widget _buildProjectsList() {
     final projectsBox = Hive.box<Project>('projects');
     return ValueListenableBuilder(

@@ -1,11 +1,11 @@
+// lib/presentation/widgets/processing_overlay.dart
 import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
 import 'package:pro_capcut/presentation/widgets/ai_processing_animation.dart';
 
 class ProcessingOverlay extends StatelessWidget {
-  final EditorProcessing processingState;
+  final EditorLoaded processingState; // <-- CHANGED
   const ProcessingOverlay({super.key, required this.processingState});
 
   @override
@@ -15,7 +15,7 @@ class ProcessingOverlay extends StatelessWidget {
       child: Container(
         color: Colors.black.withOpacity(0.5),
         child: Center(
-          child: (processingState.type == ProcessingType.aiEnhance)
+          child: (processingState.processingType == ProcessingType.aiEnhance)
               ? const AiProcessingAnimation()
               : Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 40.0),
@@ -27,7 +27,7 @@ class ProcessingOverlay extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            'Processing... ${(processingState.progress * 100).toStringAsFixed(0)}%',
+                            'Processing... ${(processingState.processingProgress * 100).toStringAsFixed(0)}%', // <-- CHANGED
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 16,
@@ -35,7 +35,8 @@ class ProcessingOverlay extends StatelessWidget {
                           ),
                           const SizedBox(height: 16),
                           LinearProgressIndicator(
-                            value: processingState.progress,
+                            value: processingState
+                                .processingProgress, // <-- CHANGED
                             backgroundColor: Colors.grey[800],
                             valueColor: const AlwaysStoppedAnimation<Color>(
                               Colors.blueAccent,

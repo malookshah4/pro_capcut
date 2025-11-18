@@ -1,17 +1,9 @@
-part of 'editor_bloc.dart';
+// lib/bloc/editor_state.dart
 
-enum ProcessingType {
-  stabilization,
-  aiEnhance,
-  noiseReduction,
-  split,
-  export,
-  speed,
-}
+part of 'editor_bloc.dart';
 
 abstract class EditorState extends Equatable {
   const EditorState();
-
   @override
   List<Object?> get props => [];
 }
@@ -19,106 +11,85 @@ abstract class EditorState extends Equatable {
 class EditorInitial extends EditorState {}
 
 class EditorLoaded extends EditorState {
-  final String projectId;
-  final List<List<VideoClip>> timelineHistory;
-  final int historyIndex;
+  final Project project;
   final bool isPlaying;
-  final int? selectedClipIndex;
   final Duration videoPosition;
-  final Duration videoDuration;
-  final List<VideoClip>? liveClips;
-  final List<AudioClip> audioClips;
+  final String? selectedTrackId;
+  final String? selectedClipId;
+  final ProcessingType? processingType;
+  final double processingProgress;
+  // --- NEW: Forces rebuilds when data inside the project changes ---
+  final int version;
 
   const EditorLoaded({
-    required this.projectId,
-    required this.timelineHistory,
-    required this.historyIndex,
-    required this.isPlaying,
-    this.selectedClipIndex,
+    required this.project,
+    this.isPlaying = false,
     this.videoPosition = Duration.zero,
-    this.videoDuration = Duration.zero,
-    this.liveClips,
-    this.audioClips = const [],
+    this.selectedTrackId,
+    this.selectedClipId,
+    this.processingType,
+    this.processingProgress = 0.0,
+    this.version = 0,
   });
 
-  List<VideoClip> get currentClips => timelineHistory[historyIndex];
-  bool get canUndo => historyIndex > 0;
-  bool get canRedo => historyIndex < timelineHistory.length - 1;
-  List<VideoClip> get liveCurrentClip =>
-      liveClips ?? timelineHistory[historyIndex];
+  // Helper getter for the main video track
+  EditorTrack get videoTrack =>
+      project.tracks.firstWhere((t) => t.type == TrackType.video);
+
+  // Helper getter for the project's total duration
+  Duration get videoDuration {
+    if (videoTrack.clips.isEmpty) return Duration.zero;
+    // Calculate total duration from the main video track
+    return videoTrack.clips.fold(
+      Duration.zero,
+      (prev, clip) => prev + clip.duration,
+    );
+  }
+
+  bool get isProcessing => processingType != null;
 
   EditorLoaded copyWith({
-    String? projectId,
-    List<List<VideoClip>>? timelineHistory,
-    int? historyIndex,
+    Project? project,
     bool? isPlaying,
-    int? selectedClipIndex,
-    bool deselectClip = false,
     Duration? videoPosition,
-    Duration? videoDuration,
-    List<VideoClip>? liveClips,
-    bool clearLiveClips = false,
-    List<AudioClip>? audioClips,
+    String? selectedTrackId,
+    bool clearSelectedTrackId = false,
+    String? selectedClipId,
+    bool clearSelectedClipId = false,
+    ProcessingType? processingType,
+    bool clearProcessing = false,
+    double? processingProgress,
+    int? version, // Add version to copyWith
   }) {
     return EditorLoaded(
-      projectId: projectId ?? this.projectId,
-      timelineHistory: timelineHistory ?? this.timelineHistory,
-      historyIndex: historyIndex ?? this.historyIndex,
+      project: project ?? this.project,
       isPlaying: isPlaying ?? this.isPlaying,
       videoPosition: videoPosition ?? this.videoPosition,
-      videoDuration: videoDuration ?? this.videoDuration,
-      selectedClipIndex: deselectClip
+      selectedTrackId: clearSelectedTrackId
           ? null
-          : (selectedClipIndex ?? this.selectedClipIndex),
-      liveClips: clearLiveClips ? null : liveClips ?? this.liveClips,
-      audioClips: audioClips ?? this.audioClips,
+          : selectedTrackId ?? this.selectedTrackId,
+      selectedClipId: clearSelectedClipId
+          ? null
+          : selectedClipId ?? this.selectedClipId,
+      processingType: clearProcessing
+          ? null
+          : processingType ?? this.processingType,
+      processingProgress: processingProgress ?? this.processingProgress,
+      version: version ?? this.version,
     );
   }
 
   @override
   List<Object?> get props => [
-    projectId,
-    timelineHistory,
-    historyIndex,
+    project,
     isPlaying,
-    selectedClipIndex,
-    videoDuration,
     videoPosition,
-    liveClips,
-    audioClips,
+    selectedTrackId,
+    selectedClipId,
+    processingType,
+    processingProgress,
+    version, // Include version in props for Equatable
   ];
 }
 
-class EditorProcessing extends EditorLoaded {
-  final double progress;
-  final ProcessingType type;
-
-  const EditorProcessing({
-    required super.projectId,
-    required super.timelineHistory,
-    required super.historyIndex,
-    required super.isPlaying,
-    super.selectedClipIndex,
-    super.videoPosition,
-    super.videoDuration,
-    super.liveClips,
-    super.audioClips,
-    required this.progress,
-    required this.type,
-  });
-
-  @override
-  List<Object?> get props => [
-    projectId,
-    timelineHistory,
-    historyIndex,
-    isPlaying,
-    selectedClipIndex,
-    videoDuration,
-    videoPosition,
-    liveClips,
-    audioClips,
-    progress,
-    type,
-  ];
-}
+enum ProcessingType { stabilization, aiEnhance, noiseReduction, export }

@@ -1,11 +1,10 @@
 // lib/domain/models/project.dart
 import 'package:hive/hive.dart';
-import 'package:pro_capcut/domain/models/audio_clip.dart';
-import 'package:pro_capcut/domain/models/video_clip.dart';
+import 'package:pro_capcut/domain/models/editor_track.dart';
 
-part 'project.g.dart'; // This will be generated
+part 'project.g.dart'; // This will be regenerated
 
-@HiveType(typeId: 0) // Main object, usually typeId 0
+@HiveType(typeId: 0) // Keep existing typeId
 class Project extends HiveObject {
   @HiveField(0)
   String id;
@@ -13,25 +12,20 @@ class Project extends HiveObject {
   @HiveField(1)
   DateTime lastModified;
 
-  @HiveField(2)
-  List<VideoClip> videoClips;
+  @HiveField(2) // This field used to be videoClips
+  List<EditorTrack> tracks; // <-- THE BIG CHANGE
 
-  @HiveField(3)
-  List<AudioClip> audioClips;
-
+  @HiveField(3) // This field used to be audioClips (now empty)
+  // We leave this field number blank for safety
   @HiveField(4)
   String? thumbnailPath;
+
+  // Field 5 (textClips) is also now empty
 
   Project({
     required this.id,
     required this.lastModified,
-    required this.videoClips,
-    required this.audioClips,
+    required this.tracks,
     this.thumbnailPath,
   });
-
-  @override
-  String toString() {
-    return 'Project(id: $id, lastModified: $lastModified, thumbnailPath: $thumbnailPath, videoClips: ${videoClips.length}, audioClips: ${audioClips.length})';
-  }
 }

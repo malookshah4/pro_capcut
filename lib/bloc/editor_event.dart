@@ -1,49 +1,29 @@
+// lib/bloc/editor_event.dart
 part of 'editor_bloc.dart';
 
 abstract class EditorEvent extends Equatable {
   const EditorEvent();
-
   @override
-  List<Object> get props => [];
+  List<Object?> get props => [];
 }
 
-// Sent when the screen first loads with the initial video
-class EditorVideoInitialized extends EditorEvent {
-  final File videoFile;
-  const EditorVideoInitialized(this.videoFile);
+// --- Project Events ---
+class EditorProjectLoaded extends EditorEvent {
+  final Project project;
+  const EditorProjectLoaded(this.project);
 }
 
-// Sent when the user presses the Stabilize button
-class StabilizationStarted extends EditorEvent {}
+class EditorProjectSaved extends EditorEvent {}
 
-// Sent when the user presses Undo/Redo
-class UndoRequested extends EditorEvent {}
-
-class RedoRequested extends EditorEvent {}
-
-// Sent by the player when play/pause state changes
+// --- Playback Events ---
 class PlaybackStatusChanged extends EditorEvent {
   final bool isPlaying;
   const PlaybackStatusChanged(this.isPlaying);
 }
 
-class NoiseReductionApplied extends EditorEvent {}
-
-class AiEnhanceVoiceStarted extends EditorEvent {}
-
-class ClipTapped extends EditorEvent {
-  // We pass the index of the clip that was tapped. Null means deselect.
-  final int? clipIndex;
-  const ClipTapped(this.clipIndex);
-
-  @override
-  List<Object> get props => [if (clipIndex != null) clipIndex!];
-}
-
 class VideoPositionChanged extends EditorEvent {
   final Duration position;
-  final Duration duration;
-  const VideoPositionChanged(this.position, this.duration);
+  const VideoPositionChanged(this.position);
 }
 
 class VideoSeekRequsted extends EditorEvent {
@@ -51,29 +31,22 @@ class VideoSeekRequsted extends EditorEvent {
   const VideoSeekRequsted(this.position);
 }
 
+// --- Selection Events ---
+class ClipTapped extends EditorEvent {
+  final String? trackId;
+  final String? clipId;
+  const ClipTapped({this.trackId, this.clipId});
+}
+
 class ClipSplitRequested extends EditorEvent {
-  final int clipIndex;
-  final Duration splitAt; // The global timeline position to split at
-  const ClipSplitRequested({required this.clipIndex, required this.splitAt});
-
-  @override
-  List<Object> get props => [clipIndex, splitAt];
+  final Duration splitAt;
+  const ClipSplitRequested({required this.splitAt});
 }
 
-class ClipDeleted extends EditorEvent {}
-
-class ExportStarted extends EditorEvent {
-  // We can now pass the settings to the event
-  final ExportSettings settings;
-  const ExportStarted(this.settings);
-}
-
-class ClipSpeedChanged extends EditorEvent {
-  final double newSpeed;
-  const ClipSpeedChanged(this.newSpeed);
-
-  @override
-  List<Object> get props => [newSpeed];
+class ClipDeleted extends EditorEvent {
+  final String trackId;
+  final String clipId;
+  const ClipDeleted({required this.trackId, required this.clipId});
 }
 
 class ClipAdded extends EditorEvent {
@@ -81,37 +54,118 @@ class ClipAdded extends EditorEvent {
   const ClipAdded(this.videoFile);
 }
 
-class ClipTrimmed extends EditorEvent {
-  final int clipIndex;
-  // Use nullable Durations so we know which handle is being dragged
-  final Duration? newStart;
-  final Duration? newEnd;
+// --- Trim Events ---
+class ClipTrimRequested extends EditorEvent {
+  final String trackId;
+  final String clipId;
+  final Duration delta;
+  final bool isStartHandle;
 
-  const ClipTrimmed({required this.clipIndex, this.newStart, this.newEnd});
+  const ClipTrimRequested({
+    required this.trackId,
+    required this.clipId,
+    required this.delta,
+    required this.isStartHandle,
+  });
 
   @override
-  List<Object> get props => [clipIndex, newStart ?? '', newEnd ?? ''];
+  List<Object?> get props => [trackId, clipId, delta, isStartHandle];
 }
 
-class ClipTrimEnded extends EditorEvent {}
+class ClipRippleRequested extends EditorEvent {
+  final String trackId;
+  const ClipRippleRequested(this.trackId);
+}
 
-class AudioExtractedAndAdded extends EditorEvent {
+class ClipMoved extends EditorEvent {
+  final String trackId;
+  final String clipId;
+  final Duration delta;
+
+  const ClipMoved({
+    required this.trackId,
+    required this.clipId,
+    required this.delta,
+  });
+
+  @override
+  List<Object?> get props => [trackId, clipId, delta];
+}
+
+class ClipTextUpdated extends EditorEvent {
+  final String trackId;
+  final String clipId;
+  final String text;
+  final TextStyleModel style;
+
+  const ClipTextUpdated({
+    required this.trackId,
+    required this.clipId,
+    required this.text,
+    required this.style,
+  });
+}
+
+class TrackLocked extends EditorEvent {
+  final String trackId;
+  const TrackLocked(this.trackId);
+}
+
+class TrackMuted extends EditorEvent {
+  final String trackId;
+  const TrackMuted(this.trackId);
+}
+
+class TrackVisibilityToggled extends EditorEvent {
+  final String trackId;
+  const TrackVisibilityToggled(this.trackId);
+}
+
+class ExportStarted extends EditorEvent {
+  final ExportSettings settings;
+  const ExportStarted(this.settings);
+}
+
+class AudioTrackAdded extends EditorEvent {
+  final File audioFile;
+  const AudioTrackAdded(this.audioFile);
+}
+
+class TextTrackAdded extends EditorEvent {
+  final String text;
+  final TextStyleModel style;
+  const TextTrackAdded(this.text, this.style);
+}
+
+class OverlayTrackAdded extends EditorEvent {
   final File videoFile;
-  const AudioExtractedAndAdded(this.videoFile);
+  const OverlayTrackAdded(this.videoFile);
 }
 
-class EditorProjectLoaded extends EditorEvent {
-  final Project project;
-  const EditorProjectLoaded(this.project);
-}
+class ClipTransformUpdated extends EditorEvent {
+  final String trackId;
+  final String clipId;
+  final double offsetX;
+  final double offsetY;
+  final double scale;
+  final double rotation;
 
-class ClipVolumeChanged extends EditorEvent {
-  final double newVolume;
-
-  const ClipVolumeChanged(this.newVolume);
+  const ClipTransformUpdated({
+    required this.trackId,
+    required this.clipId,
+    required this.offsetX,
+    required this.offsetY,
+    required this.scale,
+    required this.rotation,
+  });
 
   @override
-  List<Object> get props => [newVolume];
+  List<Object?> get props => [
+    trackId,
+    clipId,
+    offsetX,
+    offsetY,
+    scale,
+    rotation,
+  ];
 }
-
-class EditorProjectSaved extends EditorEvent {}

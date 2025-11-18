@@ -1,47 +1,67 @@
-// lib/domain/models/audio_clip.dart
 import 'package:equatable/equatable.dart';
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
+import 'package:pro_capcut/domain/models/timeline_clip.dart';
 
 part 'audio_clip.g.dart';
 
 @immutable
 @HiveType(typeId: 2)
-class AudioClip extends Equatable {
-  @HiveField(0)
-  final String filePath;
-
-  @HiveField(1)
-  final String uniqueId;
-
-  @HiveField(2)
-  final int durationInMicroseconds;
-
+class AudioClip extends TimelineClip with EquatableMixin {
   @HiveField(3)
-  final int startTimeInTimelineInMicroseconds;
+  final String filePath;
 
   @HiveField(4, defaultValue: 1.0)
   final double volume;
 
-  // --- THIS CONSTRUCTOR IS NOW CORRECTED ---
-  const AudioClip({
+  // --- NEW: Track where in the source file we start playing ---
+  @HiveField(5, defaultValue: 0)
+  final int startTimeInSourceInMicroseconds;
+
+  AudioClip({
+    required super.id,
+    required super.startTimeInTimelineInMicroseconds,
+    required super.durationInMicroseconds,
     required this.filePath,
-    required this.uniqueId,
-    required this.durationInMicroseconds,
-    required this.startTimeInTimelineInMicroseconds,
     this.volume = 1.0,
+    this.startTimeInSourceInMicroseconds = 0,
   });
 
-  Duration get duration => Duration(microseconds: durationInMicroseconds);
-  Duration get startTimeInTimeline =>
-      Duration(microseconds: startTimeInTimelineInMicroseconds);
+  // Helper Getter
+  Duration get startTimeInSource =>
+      Duration(microseconds: startTimeInSourceInMicroseconds);
 
   @override
   List<Object?> get props => [
-    filePath,
-    uniqueId,
-    durationInMicroseconds,
+    id,
     startTimeInTimelineInMicroseconds,
+    durationInMicroseconds,
+    filePath,
     volume,
+    startTimeInSourceInMicroseconds,
   ];
+
+  // --- CopyWith for Updates ---
+  AudioClip copyWith({
+    String? id,
+    int? startTimeInTimelineInMicroseconds,
+    int? durationInMicroseconds,
+    String? filePath,
+    double? volume,
+    int? startTimeInSourceInMicroseconds,
+  }) {
+    return AudioClip(
+      id: id ?? this.id,
+      startTimeInTimelineInMicroseconds:
+          startTimeInTimelineInMicroseconds ??
+          this.startTimeInTimelineInMicroseconds,
+      durationInMicroseconds:
+          durationInMicroseconds ?? this.durationInMicroseconds,
+      filePath: filePath ?? this.filePath,
+      volume: volume ?? this.volume,
+      startTimeInSourceInMicroseconds:
+          startTimeInSourceInMicroseconds ??
+          this.startTimeInSourceInMicroseconds,
+    );
+  }
 }

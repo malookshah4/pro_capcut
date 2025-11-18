@@ -72,10 +72,11 @@ class FFmpegCommandBuilder {
       final audioClip = clips[i];
       final inputIndex = _audioPathMap[audioClip.filePath]!;
       final delayMs = audioClip.startTimeInTimeline.inMilliseconds;
+      // final delayMs = audioClip.startTimeInTimeline.inMilliseconds;
 
       // Apply delay and volume to the additional audio track
       _filterComplex.writeln(
-        '[$inputIndex:a]adelay=${delayMs}|${delayMs},volume=${audioClip.volume}[aud$i];',
+        '[$inputIndex:a]adelay=$delayMs|$delayMs,volume=${audioClip.volume}[aud$i];',
       );
       mixStreams.write('[aud$i]');
     }

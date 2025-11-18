@@ -1,12 +1,11 @@
+// lib/presentation/widgets/playback_controls.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
 
 class PlaybackControls extends StatelessWidget {
   final EditorLoaded loadedState;
   final VoidCallback onPlayPause;
-  // NEW: Receive notifiers from the coordinator
   final ValueListenable<bool> isPlayingNotifier;
   final ValueListenable<Duration> positionNotifier;
 
@@ -25,7 +24,6 @@ class PlaybackControls extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16.0),
       child: Row(
         children: [
-          // This Text widget listens to the position notifier for efficient updates
           ValueListenableBuilder<Duration>(
             valueListenable: positionNotifier,
             builder: (context, position, child) {
@@ -36,14 +34,7 @@ class PlaybackControls extends StatelessWidget {
             },
           ),
           const Spacer(),
-          IconButton(
-            icon: const Icon(Icons.undo_rounded),
-            color: loadedState.canUndo ? Colors.white : Colors.grey[700],
-            onPressed: loadedState.canUndo
-                ? () => context.read<EditorBloc>().add(UndoRequested())
-                : null,
-          ),
-          // The play/pause button listens to the isPlaying notifier
+          // The play/pause button
           ValueListenableBuilder<bool>(
             valueListenable: isPlayingNotifier,
             builder: (context, isPlaying, child) {
@@ -56,13 +47,6 @@ class PlaybackControls extends StatelessWidget {
                 onPressed: onPlayPause,
               );
             },
-          ),
-          IconButton(
-            icon: const Icon(Icons.redo_rounded),
-            color: loadedState.canRedo ? Colors.white : Colors.grey[700],
-            onPressed: loadedState.canRedo
-                ? () => context.read<EditorBloc>().add(RedoRequested())
-                : null,
           ),
           const Spacer(),
           // Placeholder to balance the layout

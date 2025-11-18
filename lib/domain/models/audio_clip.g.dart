@@ -17,10 +17,10 @@ class AudioClipAdapter extends TypeAdapter<AudioClip> {
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
     return AudioClip(
-      filePath: fields[0] as String,
-      uniqueId: fields[1] as String,
+      id: fields[0] as String,
+      startTimeInTimelineInMicroseconds: fields[1] as int,
       durationInMicroseconds: fields[2] as int,
-      startTimeInTimelineInMicroseconds: fields[3] as int,
+      filePath: fields[3] as String,
       volume: fields[4] == null ? 1.0 : fields[4] as double,
     );
   }
@@ -29,16 +29,16 @@ class AudioClipAdapter extends TypeAdapter<AudioClip> {
   void write(BinaryWriter writer, AudioClip obj) {
     writer
       ..writeByte(5)
-      ..writeByte(0)
-      ..write(obj.filePath)
-      ..writeByte(1)
-      ..write(obj.uniqueId)
-      ..writeByte(2)
-      ..write(obj.durationInMicroseconds)
       ..writeByte(3)
-      ..write(obj.startTimeInTimelineInMicroseconds)
+      ..write(obj.filePath)
       ..writeByte(4)
-      ..write(obj.volume);
+      ..write(obj.volume)
+      ..writeByte(0)
+      ..write(obj.id)
+      ..writeByte(1)
+      ..write(obj.startTimeInTimelineInMicroseconds)
+      ..writeByte(2)
+      ..write(obj.durationInMicroseconds);
   }
 
   @override

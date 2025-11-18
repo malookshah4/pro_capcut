@@ -1,53 +1,50 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'video_clip.dart';
+part of 'text_clip.dart';
 
 // **************************************************************************
 // TypeAdapterGenerator
 // **************************************************************************
 
-class VideoClipAdapter extends TypeAdapter<VideoClip> {
+class TextClipAdapter extends TypeAdapter<TextClip> {
   @override
-  final int typeId = 1;
+  final int typeId = 3;
 
   @override
-  VideoClip read(BinaryReader reader) {
+  TextClip read(BinaryReader reader) {
     final numOfFields = reader.readByte();
     final fields = <int, dynamic>{
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
-    return VideoClip(
+    return TextClip(
       id: fields[0] as String,
       startTimeInTimelineInMicroseconds: fields[1] as int,
       durationInMicroseconds: fields[2] as int,
-      sourcePath: fields[3] as String,
-      sourceDurationInMicroseconds: fields[5] as int,
-      startTimeInSourceInMicroseconds: fields[6] as int,
-      endTimeInSourceInMicroseconds: fields[7] as int,
-      processedPath: fields[4] as String?,
-      speed: fields[8] == null ? 1.0 : fields[8] as double,
-      volume: fields[9] == null ? 1.0 : fields[9] as double,
+      text: fields[3] as String,
+      style: fields[4] as TextStyleModel,
+      offsetX: fields[5] as double,
+      offsetY: fields[6] as double,
+      scale: fields[7] as double,
+      rotation: fields[8] as double,
     );
   }
 
   @override
-  void write(BinaryWriter writer, VideoClip obj) {
+  void write(BinaryWriter writer, TextClip obj) {
     writer
-      ..writeByte(10)
-      ..writeByte(3)
-      ..write(obj.sourcePath)
-      ..writeByte(4)
-      ..write(obj.processedPath)
-      ..writeByte(5)
-      ..write(obj.sourceDurationInMicroseconds)
-      ..writeByte(6)
-      ..write(obj.startTimeInSourceInMicroseconds)
-      ..writeByte(7)
-      ..write(obj.endTimeInSourceInMicroseconds)
-      ..writeByte(8)
-      ..write(obj.speed)
       ..writeByte(9)
-      ..write(obj.volume)
+      ..writeByte(3)
+      ..write(obj.text)
+      ..writeByte(4)
+      ..write(obj.style)
+      ..writeByte(5)
+      ..write(obj.offsetX)
+      ..writeByte(6)
+      ..write(obj.offsetY)
+      ..writeByte(7)
+      ..write(obj.scale)
+      ..writeByte(8)
+      ..write(obj.rotation)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -62,7 +59,7 @@ class VideoClipAdapter extends TypeAdapter<VideoClip> {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is VideoClipAdapter &&
+      other is TextClipAdapter &&
           runtimeType == other.runtimeType &&
           typeId == other.typeId;
 }
