@@ -20,6 +20,7 @@ class EditorLoaded extends EditorState {
   final double processingProgress;
   // --- NEW: Forces rebuilds when data inside the project changes ---
   final int version;
+  final bool isExporting;
 
   const EditorLoaded({
     required this.project,
@@ -30,6 +31,7 @@ class EditorLoaded extends EditorState {
     this.processingType,
     this.processingProgress = 0.0,
     this.version = 0,
+    this.isExporting = false,
   });
 
   // Helper getter for the main video track
@@ -60,6 +62,7 @@ class EditorLoaded extends EditorState {
     bool clearProcessing = false,
     double? processingProgress,
     int? version, // Add version to copyWith
+    bool? isExporting,
   }) {
     return EditorLoaded(
       project: project ?? this.project,
@@ -76,6 +79,7 @@ class EditorLoaded extends EditorState {
           : processingType ?? this.processingType,
       processingProgress: processingProgress ?? this.processingProgress,
       version: version ?? this.version,
+      isExporting: isExporting ?? this.isExporting,
     );
   }
 
@@ -92,4 +96,4 @@ class EditorLoaded extends EditorState {
   ];
 }
 
-enum ProcessingType { stabilization, aiEnhance, noiseReduction, export }
+enum ProcessingType { stabilization, aiEnhance, noiseReduction, export, none }

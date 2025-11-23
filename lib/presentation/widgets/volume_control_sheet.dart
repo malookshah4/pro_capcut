@@ -20,50 +20,74 @@ class _VolumeControlSheetState extends State<VolumeControlSheet> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      height: 200,
+      padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 24.0),
       decoration: const BoxDecoration(
-        color: Color(0xFF222222),
+        color: Color.fromARGB(255, 22, 22, 22),
         borderRadius: BorderRadius.only(
           topLeft: Radius.circular(20),
           topRight: Radius.circular(20),
         ),
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
+          // --- HEADER: Title & Actions ---
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Volume',
-                style: TextStyle(color: Colors.white, fontSize: 16),
+              // Close (Cancel)
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
               ),
-              Text(
-                '${(_currentVolume * 100).toInt()}', // Display volume as percentage
-                style: const TextStyle(color: Colors.white70, fontSize: 16),
+
+              // Title & Value
+              Column(
+                children: [
+                  const Text(
+                    'Volume',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${(_currentVolume * 100).toInt()}%',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+
+              // Check (Confirm) -- THIS WAS MISSING
+              IconButton(
+                icon: const Icon(
+                  Icons.check,
+                  color: Colors.blueAccent,
+                  size: 28,
+                ),
+                onPressed: () => Navigator.pop(context, _currentVolume),
               ),
             ],
           ),
+
+          const SizedBox(height: 20),
+
+          // --- SLIDER ---
           Slider(
             value: _currentVolume,
-            min: 0.0, // 0% volume (mute)
-            max: 2.0, // 200% volume (boost)
-            label: '${(_currentVolume * 100).toInt()}',
-            activeColor: Colors.white,
+            min: 0.0, // 0% (Mute)
+            max: 2.0, // 200% (Boost)
+            divisions: 200,
+            label: '${(_currentVolume * 100).toInt()}%',
+            activeColor: Colors.blueAccent,
             inactiveColor: Colors.white30,
             onChanged: (value) {
               setState(() {
                 _currentVolume = value;
               });
-              // You can dispatch here for live updates, but it can be janky.
-              // It's often better to dispatch only when the user finishes dragging.
-            },
-            // ✨ This is the best place to update the BLoC state
-            onChangeEnd: (value) {
-              // TODO: Re-implement this in Phase 4 with new event
-              // context.read<EditorBloc>().add(ClipVolumeChanged(value));
-              print("Volume changed to $value");
             },
           ),
         ],

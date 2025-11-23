@@ -4,16 +4,23 @@ import 'package:pro_capcut/bloc/editor_bloc.dart';
 import 'package:pro_capcut/domain/models/project.dart';
 import 'package:pro_capcut/domain/models/text_clip.dart';
 import 'package:pro_capcut/domain/models/timeline_clip.dart';
+import 'package:pro_capcut/domain/models/video_clip.dart'; // Required for checking TrackType.video
+import 'package:pro_capcut/domain/models/editor_track.dart'; // Required for TrackType
 import 'package:pro_capcut/presentation/widgets/_playback_controls.dart';
 import 'package:pro_capcut/presentation/widgets/_video_viewport.dart';
 import 'package:pro_capcut/presentation/widgets/playhead.dart';
 import 'package:pro_capcut/presentation/widgets/editor_toolbars.dart';
 import 'package:pro_capcut/presentation/widgets/export_options_sheet.dart';
-import 'package:pro_capcut/presentation/widgets/exporting_screen.dart';
+import 'package:pro_capcut/presentation/screens/exporting_screen.dart';
 import 'package:pro_capcut/presentation/widgets/procssing_overlay.dart';
 import 'package:pro_capcut/presentation/widgets/timeline_area.dart';
-import 'package:pro_capcut/presentation/widgets/text_preview_layer.dart'; // NEW IMPORT
+import 'package:pro_capcut/presentation/widgets/text_preview_layer.dart';
+import 'package:pro_capcut/presentation/widgets/overlay_preview_layer.dart';
 import 'package:pro_capcut/utils/PlaybackCoordinator.dart';
+
+// IMPORTANT: Import your specific ThumbnailUtils file here.
+// Adjust the path if your file is named differently.
+import 'package:pro_capcut/utils/thumbnail_utils.dart';
 
 class EditorScreen extends StatelessWidget {
   final Project project;
@@ -37,6 +44,9 @@ class EditorView extends StatefulWidget {
 
 class _EditorViewState extends State<EditorView> {
   late final PlaybackCoordinator _coordinator;
+
+  // Variable to store the thumbnail path for the export screen
+  String? _tempThumbnailPath;
 
   @override
   void initState() {
@@ -62,16 +72,22 @@ class _EditorViewState extends State<EditorView> {
 
   @override
   void dispose() {
+    // Clean up the thumbnail using your Utils when exiting the screen
+    if (_tempThumbnailPath != null) {
+      ThumbnailUtils.deleteThumbnail(_tempThumbnailPath);
+    }
     _coordinator.dispose();
     super.dispose();
   }
 
   void _onPlayPause() {
-    final isPlaying = context.read<EditorBloc>().state as EditorLoaded;
-    if (isPlaying.isPlaying) {
-      _coordinator.pause();
-    } else {
-      _coordinator.play();
+    final state = context.read<EditorBloc>().state;
+    if (state is EditorLoaded) {
+      if (state.isPlaying) {
+        _coordinator.pause();
+      } else {
+        _coordinator.play();
+      }
     }
   }
 
@@ -103,7 +119,12 @@ class _EditorViewState extends State<EditorView> {
     return BlocConsumer<EditorBloc, EditorState>(
       listener: (context, state) {
         if (state is EditorLoaded) {
+          if (state.isExporting) {
+            // Only pause here. Don't dispose yet.
+            _coordinator.pause();
+          }
           _coordinator.updateTimeline(state.project.tracks);
+
           if ((state.videoPosition - _coordinator.position.value).abs() >
                   const Duration(milliseconds: 100) &&
               !state.isPlaying) {
@@ -128,69 +149,79 @@ class _EditorViewState extends State<EditorView> {
             appBar: _buildAppBar(context, state),
             body: Stack(
               children: [
-                Column(
-                  children: [
-                    // --- Video Viewport Container ---
-                    SizedBox(
-                      height: MediaQuery.of(context).size.height * 0.45,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          // 1. The Video Player
-                          ValueListenableBuilder(
-                            valueListenable: _coordinator.activeController,
-                            builder: (context, controller, child) {
-                              return VideoViewport(controller: controller);
-                            },
-                          ),
-                          // 2. The Text Overlay Layer (Transparent on top)
-                          // We use ValueListenableBuilder to update it on every frame (playback)
-                          ValueListenableBuilder<Duration>(
-                            valueListenable: _coordinator.position,
-                            builder: (context, position, child) {
-                              return TextPreviewLayer(currentTime: position);
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    // --- Controls & Timeline ---
-                    PlaybackControls(
-                      loadedState: state,
-                      onPlayPause: _onPlayPause,
-                      isPlayingNotifier: _coordinator.isPlaying,
-                      positionNotifier: _coordinator.position,
-                    ),
-                    Expanded(
-                      child: Container(
-                        color: Colors.black,
+                // 1. MAIN EDITOR UI
+                if (state.processingType != ProcessingType.export)
+                  Column(
+                    children: [
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.45,
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            TimelineArea(
-                              state: state,
-                              positionNotifier: _coordinator.position,
+                            ValueListenableBuilder(
+                              valueListenable: _coordinator.activeController,
+                              builder: (context, controller, child) {
+                                return VideoViewport(controller: controller);
+                              },
                             ),
-                            const Align(
-                              alignment: Alignment.center,
-                              child: Playhead(),
+                            ValueListenableBuilder<Duration>(
+                              valueListenable: _coordinator.position,
+                              builder: (context, position, child) {
+                                return OverlayPreviewLayer(
+                                  currentTime: position,
+                                  coordinator: _coordinator,
+                                );
+                              },
+                            ),
+                            ValueListenableBuilder<Duration>(
+                              valueListenable: _coordinator.position,
+                              builder: (context, position, child) {
+                                return TextPreviewLayer(currentTime: position);
+                              },
                             ),
                           ],
                         ),
                       ),
-                    ),
-                    _buildBottomToolbar(state),
-                  ],
-                ),
+                      PlaybackControls(
+                        loadedState: state,
+                        onPlayPause: _onPlayPause,
+                        isPlayingNotifier: _coordinator.isPlaying,
+                        positionNotifier: _coordinator.position,
+                      ),
+                      Expanded(
+                        child: Container(
+                          color: Colors.black,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              TimelineArea(
+                                state: state,
+                                positionNotifier: _coordinator.position,
+                              ),
+                              const Align(
+                                alignment: Alignment.center,
+                                child: Playhead(),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      _buildBottomToolbar(state),
+                    ],
+                  ),
+
+                // 2. PROCESSING OVERLAYS
                 if (state.isProcessing &&
                     state.processingType != ProcessingType.export)
                   ProcessingOverlay(processingState: state),
+
+                // 3. EXPORT SCREEN
                 if (state.isProcessing &&
                     state.processingType == ProcessingType.export)
                   ExportingScreen(
                     processingState: state,
-                    previewController: _coordinator.activeController.value,
+                    // Pass the generated thumbnail path here
+                    thumbnailPath: _tempThumbnailPath,
                   ),
               ],
             ),
@@ -227,6 +258,42 @@ class _EditorViewState extends State<EditorView> {
                 backgroundColor: Colors.transparent,
                 builder: (_) => const ExportOptionsSheet(),
               );
+
+              if (settings != null && context.mounted) {
+                // 1. Pause playback immediately
+                _coordinator.pause();
+
+                // 2. Generate Thumbnail
+                try {
+                  // Find the first video clip to use as a cover
+                  final videoTrack = state.project.tracks.firstWhere(
+                    (t) => t.type == TrackType.video,
+                  );
+
+                  if (videoTrack.clips.isNotEmpty) {
+                    final firstClip = videoTrack.clips.first as VideoClip;
+
+                    // Use your custom ThumbnailUtils here!
+                    _tempThumbnailPath =
+                        await ThumbnailUtils.generateAndSaveThumbnail(
+                          firstClip.sourcePath,
+                          "export_cover_${DateTime.now().millisecondsSinceEpoch}",
+                        );
+                  }
+                } catch (e) {
+                  print("Thumbnail generation failed: $e");
+                  // Proceed anyway, the export screen will just show a placeholder icon
+                }
+
+                // 3. CRITICAL FIX: Dispose the player to free hardware resources
+                await _coordinator.disposePlayerForExport();
+                await Future.delayed(const Duration(milliseconds: 500));
+
+                // 4. Start Export
+                if (context.mounted) {
+                  context.read<EditorBloc>().add(ExportStarted(settings));
+                }
+              }
             },
           ),
         ),

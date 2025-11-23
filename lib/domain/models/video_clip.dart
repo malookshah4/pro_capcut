@@ -1,15 +1,14 @@
-// lib/domain/models/video_clip.dart
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
-import 'package:pro_capcut/domain/models/timeline_clip.dart'; // Import new base class
+import 'package:pro_capcut/domain/models/timeline_clip.dart';
 
 part 'video_clip.g.dart';
 
 @immutable
-@HiveType(typeId: 1) // Keep existing typeId
+@HiveType(typeId: 1)
 class VideoClip extends TimelineClip with EquatableMixin {
-  @HiveField(3) // Start fields after base class
+  @HiveField(3)
   final String sourcePath;
 
   @HiveField(4)
@@ -30,7 +29,22 @@ class VideoClip extends TimelineClip with EquatableMixin {
   @HiveField(9, defaultValue: 1.0)
   final double volume;
 
-  // Constructor passes timeline info to the 'super' class
+  @HiveField(10)
+  final String? thumbnailPath;
+
+  // --- NEW: Transform Properties for PIP/Overlay ---
+  @HiveField(11, defaultValue: 0.5)
+  final double offsetX;
+
+  @HiveField(12, defaultValue: 0.5)
+  final double offsetY;
+
+  @HiveField(13, defaultValue: 1.0)
+  final double scale;
+
+  @HiveField(14, defaultValue: 0.0)
+  final double rotation;
+
   VideoClip({
     required super.id,
     required super.startTimeInTimelineInMicroseconds,
@@ -42,6 +56,11 @@ class VideoClip extends TimelineClip with EquatableMixin {
     this.processedPath,
     this.speed = 1.0,
     this.volume = 1.0,
+    this.thumbnailPath,
+    this.offsetX = 0.5,
+    this.offsetY = 0.5,
+    this.scale = 1.0,
+    this.rotation = 0.0,
   });
 
   String get playablePath => processedPath ?? sourcePath;
@@ -64,6 +83,11 @@ class VideoClip extends TimelineClip with EquatableMixin {
     endTimeInSourceInMicroseconds,
     speed,
     volume,
+    thumbnailPath,
+    offsetX,
+    offsetY,
+    scale,
+    rotation,
   ];
 
   VideoClip copyWith({
@@ -77,6 +101,11 @@ class VideoClip extends TimelineClip with EquatableMixin {
     int? endTimeInSourceInMicroseconds,
     double? speed,
     double? volume,
+    String? thumbnailPath,
+    double? offsetX,
+    double? offsetY,
+    double? scale,
+    double? rotation,
   }) {
     return VideoClip(
       id: id ?? this.id,
@@ -96,6 +125,11 @@ class VideoClip extends TimelineClip with EquatableMixin {
           endTimeInSourceInMicroseconds ?? this.endTimeInSourceInMicroseconds,
       speed: speed ?? this.speed,
       volume: volume ?? this.volume,
+      thumbnailPath: thumbnailPath ?? this.thumbnailPath,
+      offsetX: offsetX ?? this.offsetX,
+      offsetY: offsetY ?? this.offsetY,
+      scale: scale ?? this.scale,
+      rotation: rotation ?? this.rotation,
     );
   }
 }

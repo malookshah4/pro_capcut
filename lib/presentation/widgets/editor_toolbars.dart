@@ -2,8 +2,12 @@ import 'package:eva_icons_flutter/eva_icons_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
+import 'package:pro_capcut/domain/models/audio_clip.dart';
 import 'package:pro_capcut/domain/models/text_clip.dart';
+import 'package:pro_capcut/domain/models/video_clip.dart';
+import 'package:pro_capcut/presentation/widgets/speed_control_sheet.dart';
 import 'package:pro_capcut/presentation/widgets/text_editor_sheet.dart';
+import 'package:pro_capcut/presentation/widgets/volume_control_sheet.dart';
 
 const double kToolbarHeight = 80.0;
 
@@ -39,7 +43,6 @@ class MainToolbar extends StatelessWidget {
   }
 }
 
-// --- Toolbar for Video Clips ---
 class EditToolbar extends StatelessWidget {
   const EditToolbar({super.key});
   @override
@@ -49,6 +52,27 @@ class EditToolbar extends StatelessWidget {
     final Duration splitAt = state.videoPosition;
     final String? trackId = state.selectedTrackId;
     final String? clipId = state.selectedClipId;
+
+    // Get current values for initial sheet state
+    double currentSpeed = 1.0;
+    double currentVolume = 1.0;
+
+    if (trackId != null && clipId != null) {
+      try {
+        final track = state.project.tracks.firstWhere((t) => t.id == trackId);
+        final clip = track.clips.firstWhere((c) => c.id == clipId);
+
+        // FIX: Check for BOTH Video and Audio clips
+        if (clip is VideoClip) {
+          currentSpeed = clip.speed;
+          currentVolume = clip.volume;
+        } else if (clip is AudioClip) {
+          // Audio clips generally don't support speed in this basic implementation yet,
+          // but they definitely support volume.
+          currentVolume = clip.volume;
+        }
+      } catch (e) {}
+    }
 
     return SizedBox(
       height: kToolbarHeight,
@@ -88,12 +112,41 @@ class EditToolbar extends StatelessWidget {
                   _buildToolbarItem(
                     icon: Icons.speed,
                     label: 'Speed',
-                    onTap: () {},
+                    onTap: () async {
+                      final result = await showModalBottomSheet<double>(
+                        context: context,
+                        backgroundColor: Colors.transparent,
+                        builder: (_) => SpeedControlSheet(
+                          initialSpeed: currentSpeed,
+                          originalDuration: const Duration(
+                            minutes: 1,
+                          ), // Dummy duration
+                        ),
+                      );
+                      if (result != null && context.mounted) {
+                        context.read<EditorBloc>().add(
+                          ClipSpeedChanged(result),
+                        );
+                      }
+                    },
                   ),
                   _buildToolbarItem(
                     icon: Icons.volume_up_outlined,
                     label: 'Volume',
-                    onTap: () {},
+                    onTap: () async {
+                      final result = await showModalBottomSheet<double>(
+                        context: context,
+                        backgroundColor: Colors.transparent,
+                        builder: (_) =>
+                            VolumeControlSheet(initialVolume: currentVolume),
+                      );
+                      // Only update if user clicked Check (result is not null)
+                      if (result != null && context.mounted) {
+                        context.read<EditorBloc>().add(
+                          ClipVolumeChanged(result),
+                        );
+                      }
+                    },
                   ),
                   _buildToolbarItem(
                     icon: Icons.delete_outline,

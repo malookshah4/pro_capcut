@@ -10,36 +10,57 @@ import 'package:pro_capcut/domain/models/editor_track.dart';
 class PlaybackCoordinator extends ChangeNotifier {
   final ValueNotifier<Duration> position = ValueNotifier(Duration.zero);
   final ValueNotifier<bool> isPlaying = ValueNotifier(false);
+
+  // Main Video Controller (The canvas background)
   final ValueNotifier<VideoPlayerController?> activeController = ValueNotifier(
     null,
   );
 
-  Map<String, VideoPlayerController> _videoControllers = {};
+  // Map of Overlay Video Controllers (PIP)
+  // Key: Clip ID, Value: Controller
+  final Map<String, VideoPlayerController> _overlayControllers = {};
+
+  Map<String, VideoPlayerController> _videoControllersCache = {};
   final Map<String, AudioPlayer> _audioPlayers = {};
   StreamSubscription<void>? _positionSubscription;
   int _currentClipIndex = 0;
 
   List<VideoClip> _mainVideoClips = [];
+  List<VideoClip> _overlayClips = []; // Active overlays
   List<AudioClip> _allAudioClips = [];
   bool _isDisposed = false;
+
+  // Accessor for Overlay Layers
+  VideoPlayerController? getOverlayController(String clipId) =>
+      _overlayControllers[clipId];
 
   Future<void> updateTimeline(List<EditorTrack> tracks) async {
     if (_isDisposed) return;
     pause();
 
+    // 1. Main Video
     final videoTrack = tracks.firstWhere(
       (t) => t.type == TrackType.video,
       orElse: () => EditorTrack(id: 'error', type: TrackType.video, clips: []),
     );
     _mainVideoClips = videoTrack.clips.cast<VideoClip>();
 
+    // 2. Overlays
+    _overlayClips = tracks
+        .where((t) => t.type == TrackType.overlay)
+        .expand((t) => t.clips)
+        .cast<VideoClip>()
+        .toList();
+
+    // 3. Audio
     _allAudioClips = tracks
         .where((t) => t.type == TrackType.audio)
         .expand((t) => t.clips)
         .cast<AudioClip>()
         .toList();
 
-    await _updateVideoControllers(_mainVideoClips);
+    await _updateMainVideoControllers(_mainVideoClips);
+    await _updateOverlayControllers(_overlayClips); // Init PIPs
     await _updateAudioPlayers(_allAudioClips);
 
     _updateActiveClipForPosition(position.value, seek: true);
@@ -52,6 +73,9 @@ class PlaybackCoordinator extends ChangeNotifier {
     activeController.value!.setPlaybackSpeed(activeClip.speed);
     activeController.value!.setVolume(activeClip.volume);
     activeController.value!.play();
+
+    // Start all visible overlays
+    _syncOverlays(position.value, playing: true);
 
     isPlaying.value = true;
     _positionSubscription?.cancel();
@@ -73,36 +97,15 @@ class PlaybackCoordinator extends ChangeNotifier {
         microseconds: (timeInClip.inMicroseconds / activeClip.speed).round(),
       );
 
-      position.value = globalPosition;
-
-      // --- SYNC AUDIO PLAYERS ---
-      for (final audioClip in _allAudioClips) {
-        final player = _audioPlayers[audioClip.id];
-        if (player == null) continue;
-
-        final clipStart = audioClip.startTime;
-        final clipEnd = clipStart + audioClip.duration;
-        final isWithinBounds =
-            globalPosition >= clipStart && globalPosition < clipEnd;
-
-        if (isWithinBounds) {
-          // CORRECT MATH: Where are we inside the clip?
-          final offsetInClip = globalPosition - clipStart;
-          // CORRECT MATH: Add the source offset (e.g. if clip starts at 00:10 of the song)
-          final seekTarget = audioClip.startTimeInSource + offsetInClip;
-
-          if (!player.playing) {
-            player.setVolume(audioClip.volume);
-            player.seek(seekTarget);
-            player.play();
-          }
-        } else {
-          if (player.playing) {
-            player.pause();
-          }
-        }
+      if (!_isDisposed) {
+        position.value = globalPosition;
       }
 
+      // Sync Overlays & Audio continuously
+      _syncOverlays(globalPosition, playing: true);
+      _syncAudio(globalPosition);
+
+      // Loop Main Video Logic
       if (currentPosition >= activeClip.endTimeInSource) {
         final nextClipIndex = _currentClipIndex + 1;
         if (nextClipIndex < _mainVideoClips.length) {
@@ -116,8 +119,53 @@ class PlaybackCoordinator extends ChangeNotifier {
     });
   }
 
+  Future<void> disposePlayerForExport() async {
+    try {
+      print("Coordinator: Releasing ALL resources for export...");
+
+      // 1. Stop listening to position updates
+      _positionSubscription?.cancel();
+      _positionSubscription = null;
+
+      // 2. Dispose Main Video Controller
+      if (activeController.value != null) {
+        await activeController.value!.pause();
+        await activeController.value!.dispose();
+        activeController.value = null;
+      }
+
+      // 3. Dispose ALL Overlay Controllers (Critical for resource release)
+      for (var controller in _overlayControllers.values) {
+        await controller.pause();
+        await controller.dispose();
+      }
+      _overlayControllers.clear();
+
+      // 4. Dispose ALL Audio Players (Critical for fixing the 95% audio hang)
+      for (var player in _audioPlayers.values) {
+        await player.stop();
+        await player.dispose();
+      }
+      _audioPlayers.clear();
+
+      // 5. Dispose cached controllers
+      for (var controller in _videoControllersCache.values) {
+        await controller.dispose();
+      }
+      _videoControllersCache.clear();
+
+      print("Coordinator: All players disposed. Hardware resources freed.");
+    } catch (e) {
+      print("Error disposing players for export: $e");
+    }
+  }
+
   void pause() {
     activeController.value?.pause();
+    // Pause Overlays
+    for (var controller in _overlayControllers.values) {
+      if (controller.value.isPlaying) controller.pause();
+    }
     for (var player in _audioPlayers.values) {
       player.pause();
     }
@@ -129,20 +177,62 @@ class PlaybackCoordinator extends ChangeNotifier {
     pause();
     position.value = newPosition;
     _updateActiveClipForPosition(newPosition, seek: true);
+    _syncOverlays(newPosition, playing: false);
+    _syncAudio(newPosition);
+  }
 
+  void _syncOverlays(Duration globalPosition, {required bool playing}) {
+    for (final clip in _overlayClips) {
+      if (!_overlayControllers.containsKey(clip.id)) continue;
+      final controller = _overlayControllers[clip.id]!;
+
+      if (globalPosition >= clip.startTime && globalPosition < clip.endTime) {
+        final offset = globalPosition - clip.startTime;
+        final seekTarget = clip.startTimeInSource + offset;
+
+        // If controller is not initialized, ignore
+        if (!controller.value.isInitialized) continue;
+
+        // Check if desynced (more than 100ms off)
+        final currentPos = controller.value.position;
+        if ((currentPos - seekTarget).abs().inMilliseconds > 100) {
+          controller.seekTo(seekTarget);
+        }
+
+        if (playing && !controller.value.isPlaying) {
+          controller.setPlaybackSpeed(clip.speed);
+          controller.setVolume(clip.volume);
+          controller.play();
+        } else if (!playing && controller.value.isPlaying) {
+          controller.pause();
+        }
+      } else {
+        if (controller.value.isPlaying) {
+          controller.pause();
+        }
+      }
+    }
+  }
+
+  void _syncAudio(Duration globalPosition) {
     for (final audioClip in _allAudioClips) {
       final player = _audioPlayers[audioClip.id];
       if (player == null) continue;
 
-      if (newPosition >= audioClip.startTime &&
-          newPosition < audioClip.endTime) {
-        // Correct seek logic
-        final offsetInClip = newPosition - audioClip.startTime;
+      if (globalPosition >= audioClip.startTime &&
+          globalPosition < audioClip.endTime) {
+        final offsetInClip = globalPosition - audioClip.startTime;
         final seekTarget = audioClip.startTimeInSource + offsetInClip;
-        player.seek(seekTarget);
+
+        // Audio logic is handled mostly in play(), but seek needs this
+        if (!isPlaying.value) {
+          // Only seek if paused, otherwise let it play
+          // player.seek(seekTarget); // Warning: Frequent seeking causes stutter
+        }
       } else {
-        player.pause();
-        player.seek(Duration.zero);
+        if (player.playing) {
+          player.pause();
+        }
       }
     }
   }
@@ -151,44 +241,66 @@ class PlaybackCoordinator extends ChangeNotifier {
   void dispose() {
     _isDisposed = true;
     _positionSubscription?.cancel();
-    for (var controller in _videoControllers.values) {
-      controller.dispose();
-    }
-    for (var player in _audioPlayers.values) {
-      player.dispose();
-    }
-    _videoControllers.clear();
+    for (var controller in _videoControllersCache.values) controller.dispose();
+    for (var controller in _overlayControllers.values) controller.dispose();
+    for (var player in _audioPlayers.values) player.dispose();
+
+    _videoControllersCache.clear();
+    _overlayControllers.clear();
     _audioPlayers.clear();
+
     position.dispose();
     isPlaying.dispose();
     activeController.dispose();
     super.dispose();
   }
 
-  Future<void> _updateVideoControllers(List<VideoClip> clips) async {
+  Future<void> _updateMainVideoControllers(List<VideoClip> clips) async {
     final uniquePaths = clips.map((c) => c.playablePath).toSet();
     final newControllers = <String, VideoPlayerController>{};
-    final oldControllers = Map.of(_videoControllers);
 
     for (final path in uniquePaths) {
-      if (oldControllers.containsKey(path)) {
-        newControllers[path] = oldControllers.remove(path)!;
+      if (_videoControllersCache.containsKey(path)) {
+        newControllers[path] = _videoControllersCache[path]!;
+        _videoControllersCache.remove(path); // Move ownership
       } else {
         final controller = VideoPlayerController.file(File(path));
         try {
           await controller.initialize();
           newControllers[path] = controller;
         } catch (e) {
-          print("Error initializing controller for $path: $e");
-          controller.dispose();
+          print("Error init main controller: $e");
         }
       }
     }
-    for (var controller in oldControllers.values) {
-      controller.dispose();
+
+    // Dispose unused
+    for (var c in _videoControllersCache.values) c.dispose();
+    _videoControllersCache = newControllers;
+  }
+
+  Future<void> _updateOverlayControllers(List<VideoClip> clips) async {
+    final newIds = clips.map((c) => c.id).toSet();
+    final oldIds = _overlayControllers.keys.toSet();
+
+    // Remove deleted
+    final toRemove = oldIds.difference(newIds);
+    for (var id in toRemove) {
+      await _overlayControllers[id]?.dispose();
+      _overlayControllers.remove(id);
     }
-    if (!_isDisposed) {
-      _videoControllers = newControllers;
+
+    // Add new
+    for (final clip in clips) {
+      if (!_overlayControllers.containsKey(clip.id)) {
+        final controller = VideoPlayerController.file(File(clip.playablePath));
+        try {
+          await controller.initialize();
+          _overlayControllers[clip.id] = controller;
+        } catch (e) {
+          print("Error init overlay controller: $e");
+        }
+      }
     }
   }
 
@@ -209,7 +321,6 @@ class PlaybackCoordinator extends ChangeNotifier {
           await player.setFilePath(clip.filePath);
           _audioPlayers[clip.id] = player;
         } catch (e) {
-          print("Error setting up audio player for ${clip.filePath}: $e");
           player.dispose();
         }
       }
@@ -223,9 +334,8 @@ class PlaybackCoordinator extends ChangeNotifier {
       activeController.value = null;
       return;
     }
-
     final clip = _mainVideoClips[index];
-    final controller = _videoControllers[clip.playablePath];
+    final controller = _videoControllersCache[clip.playablePath];
     if (controller != null && controller.value.isInitialized) {
       controller.setPlaybackSpeed(clip.speed);
       controller.setVolume(clip.volume);

@@ -121,6 +121,13 @@ class TrackVisibilityToggled extends EditorEvent {
   const TrackVisibilityToggled(this.trackId);
 }
 
+class UpdateExportProgress extends EditorEvent {
+  final double progress;
+  const UpdateExportProgress(this.progress);
+  @override
+  List<Object> get props => [progress];
+}
+
 class ExportStarted extends EditorEvent {
   final ExportSettings settings;
   const ExportStarted(this.settings);
@@ -168,4 +175,14 @@ class ClipTransformUpdated extends EditorEvent {
     scale,
     rotation,
   ];
+}
+
+class ClipVolumeChanged extends EditorEvent {
+  final double volume; // 0.0 to 2.0
+  const ClipVolumeChanged(this.volume);
+}
+
+class ClipSpeedChanged extends EditorEvent {
+  final double speed; // 0.1x to 10.0x
+  const ClipSpeedChanged(this.speed);
 }
