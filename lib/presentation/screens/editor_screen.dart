@@ -1,31 +1,31 @@
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
+import 'package:pro_capcut/domain/models/editor_track.dart';
 import 'package:pro_capcut/domain/models/project.dart';
 import 'package:pro_capcut/domain/models/text_clip.dart';
 import 'package:pro_capcut/domain/models/timeline_clip.dart';
-import 'package:pro_capcut/domain/models/video_clip.dart'; // Required for checking TrackType.video
-import 'package:pro_capcut/domain/models/editor_track.dart'; // Required for TrackType
+import 'package:pro_capcut/domain/models/video_clip.dart';
+import 'package:pro_capcut/presentation/screens/exporting_screen.dart';
 import 'package:pro_capcut/presentation/widgets/_playback_controls.dart';
-import 'package:pro_capcut/presentation/widgets/_video_viewport.dart';
+import 'package:pro_capcut/presentation/widgets/overlay_preview_layer.dart';
 import 'package:pro_capcut/presentation/widgets/playhead.dart';
 import 'package:pro_capcut/presentation/widgets/editor_toolbars.dart';
 import 'package:pro_capcut/presentation/widgets/export_options_sheet.dart';
-import 'package:pro_capcut/presentation/screens/exporting_screen.dart';
 import 'package:pro_capcut/presentation/widgets/procssing_overlay.dart';
 import 'package:pro_capcut/presentation/widgets/timeline_area.dart';
 import 'package:pro_capcut/presentation/widgets/text_preview_layer.dart';
-import 'package:pro_capcut/presentation/widgets/overlay_preview_layer.dart';
+import 'package:pro_capcut/presentation/widgets/ratio_options_sheet.dart';
+import 'package:pro_capcut/presentation/widgets/transition_renderer.dart';
 import 'package:pro_capcut/utils/PlaybackCoordinator.dart';
-
-// IMPORTANT: Import your specific ThumbnailUtils file here.
-// Adjust the path if your file is named differently.
 import 'package:pro_capcut/utils/thumbnail_utils.dart';
+import 'package:video_player/video_player.dart';
 
 class EditorScreen extends StatelessWidget {
   final Project project;
   const EditorScreen({super.key, required this.project});
-
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
@@ -44,35 +44,41 @@ class EditorView extends StatefulWidget {
 
 class _EditorViewState extends State<EditorView> {
   late final PlaybackCoordinator _coordinator;
-
-  // Variable to store the thumbnail path for the export screen
   String? _tempThumbnailPath;
+
+  int _lastVersion = -1;
 
   @override
   void initState() {
     super.initState();
     _coordinator = PlaybackCoordinator();
 
+    // Listen to Coordinator position updates (e.g. during playback)
     _coordinator.position.addListener(() {
-      if (mounted) {
+      if (mounted && _coordinator.isPlaying.value) {
+        // Only sync back to Bloc if actively playing to avoid loops during seek
         context.read<EditorBloc>().add(
           VideoPositionChanged(_coordinator.position.value),
         );
       }
     });
 
+    // Listen to Coordinator playing state (e.g. if video finishes and pauses itself)
     _coordinator.isPlaying.addListener(() {
       if (mounted) {
-        context.read<EditorBloc>().add(
-          PlaybackStatusChanged(_coordinator.isPlaying.value),
-        );
+        final blocState = context.read<EditorBloc>().state;
+        if (blocState is EditorLoaded &&
+            blocState.isPlaying != _coordinator.isPlaying.value) {
+          context.read<EditorBloc>().add(
+            PlaybackStatusChanged(_coordinator.isPlaying.value),
+          );
+        }
       }
     });
   }
 
   @override
   void dispose() {
-    // Clean up the thumbnail using your Utils when exiting the screen
     if (_tempThumbnailPath != null) {
       ThumbnailUtils.deleteThumbnail(_tempThumbnailPath);
     }
@@ -83,17 +89,118 @@ class _EditorViewState extends State<EditorView> {
   void _onPlayPause() {
     final state = context.read<EditorBloc>().state;
     if (state is EditorLoaded) {
-      if (state.isPlaying) {
-        _coordinator.pause();
-      } else {
-        _coordinator.play();
-      }
+      // Toggle state in Bloc. The Listener below will handle the Coordinator.
+      context.read<EditorBloc>().add(PlaybackStatusChanged(!state.isPlaying));
     }
+  }
+
+  Future<void> _onAddMainClip() async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? video = await picker.pickVideo(source: ImageSource.gallery);
+    if (video != null && mounted) {
+      context.read<EditorBloc>().add(ClipAdded(File(video.path)));
+    }
+  }
+
+  Widget _buildCanvas(EditorLoaded state) {
+    return ValueListenableBuilder<VideoPlayerController?>(
+      valueListenable: _coordinator.activeController,
+      builder: (context, activeController, child) {
+        if (activeController == null || !activeController.value.isInitialized) {
+          return Container(
+            color: Colors.black,
+            child: const Center(
+              child: CircularProgressIndicator(color: Colors.white),
+            ),
+          );
+        }
+
+        final double videoRatio = activeController.value.aspectRatio;
+        final double? projectRatio = state.project.canvasAspectRatio;
+        final double effectiveCanvasRatio = projectRatio ?? videoRatio;
+
+        return Container(
+          color: const Color(0xFF1A1A1A),
+          alignment: Alignment.center,
+          child: AspectRatio(
+            aspectRatio: effectiveCanvasRatio,
+            child: Container(
+              color: Colors.black,
+              child: ClipRect(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Main video with transition support
+                    Center(
+                      child: AspectRatio(
+                        aspectRatio: videoRatio,
+                        child: ValueListenableBuilder<VideoPlayerController?>(
+                          valueListenable: _coordinator.incomingController,
+                          builder: (context, incomingController, child) {
+                            return ValueListenableBuilder<double>(
+                              valueListenable: _coordinator.transitionProgress,
+                              builder: (context, progress, child) {
+                                return ValueListenableBuilder<String?>(
+                                  valueListenable: _coordinator.currentTransition,
+                                  builder: (context, transitionType, child) {
+                                    return TransitionRenderer(
+                                      activeController: activeController,
+                                      incomingController: incomingController,
+                                      transitionType: transitionType,
+                                      progress: progress,
+                                    );
+                                  },
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    // Overlays
+                    ValueListenableBuilder<Duration>(
+                      valueListenable: _coordinator.position,
+                      builder: (context, position, child) {
+                        return OverlayPreviewLayer(
+                          currentTime: position,
+                          coordinator: _coordinator,
+                        );
+                      },
+                    ),
+                    // Text overlays
+                    ValueListenableBuilder<Duration>(
+                      valueListenable: _coordinator.position,
+                      builder: (context, position, child) {
+                        return TextPreviewLayer(currentTime: position);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _buildBottomToolbar(EditorLoaded state) {
     if (state.selectedClipId == null || state.selectedTrackId == null) {
-      return MainToolbar(currentIndex: 0, onTap: (i) {});
+      return MainToolbar(
+        currentIndex: 0,
+        onTap: (index) async {
+          if (index == 3) {
+            final double? result = await showModalBottomSheet<double?>(
+              context: context,
+              backgroundColor: Colors.transparent,
+              builder: (_) => const RatioOptionsSheet(),
+            );
+            if (context.mounted) {
+              context.read<EditorBloc>().add(ProjectCanvasRatioChanged(result));
+            }
+          }
+        },
+      );
     }
 
     try {
@@ -103,7 +210,6 @@ class _EditorViewState extends State<EditorView> {
       final clip = track.clips.firstWhere(
         (c) => (c as TimelineClip).id == state.selectedClipId,
       );
-
       if (clip is TextClip) {
         return TextToolbar(clip: clip, trackId: track.id);
       } else {
@@ -119,16 +225,35 @@ class _EditorViewState extends State<EditorView> {
     return BlocConsumer<EditorBloc, EditorState>(
       listener: (context, state) {
         if (state is EditorLoaded) {
-          if (state.isExporting) {
-            // Only pause here. Don't dispose yet.
+          // 1. Handle Exporting (Pause)
+          if (state.isProcessing &&
+              state.processingType == ProcessingType.export) {
             _coordinator.pause();
           }
-          _coordinator.updateTimeline(state.project.tracks);
 
-          if ((state.videoPosition - _coordinator.position.value).abs() >
-                  const Duration(milliseconds: 100) &&
-              !state.isPlaying) {
+          // 2. Handle Project Updates (Reload Timeline)
+          if (state.version != _lastVersion) {
+            _lastVersion = state.version;
+            _coordinator.updateTimeline(state.project.tracks);
+          }
+
+          // 3. Handle Seeking (Manual Drag)
+          // If position changed significantly AND we are not playing, seek.
+          final diff = (state.videoPosition - _coordinator.position.value)
+              .abs();
+          if (diff > const Duration(milliseconds: 150) && !state.isPlaying) {
             _coordinator.seek(state.videoPosition);
+          }
+
+          // 4. --- THE FIX: Sync Play/Pause State ---
+          // If Bloc says playing, but Coordinator stopped, Play.
+          // If Bloc says paused, but Coordinator playing, Pause.
+          if (state.isPlaying != _coordinator.isPlaying.value) {
+            if (state.isPlaying) {
+              _coordinator.play();
+            } else {
+              _coordinator.pause();
+            }
           }
         }
       },
@@ -149,38 +274,12 @@ class _EditorViewState extends State<EditorView> {
             appBar: _buildAppBar(context, state),
             body: Stack(
               children: [
-                // 1. MAIN EDITOR UI
                 if (state.processingType != ProcessingType.export)
                   Column(
                     children: [
                       SizedBox(
                         height: MediaQuery.of(context).size.height * 0.45,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            ValueListenableBuilder(
-                              valueListenable: _coordinator.activeController,
-                              builder: (context, controller, child) {
-                                return VideoViewport(controller: controller);
-                              },
-                            ),
-                            ValueListenableBuilder<Duration>(
-                              valueListenable: _coordinator.position,
-                              builder: (context, position, child) {
-                                return OverlayPreviewLayer(
-                                  currentTime: position,
-                                  coordinator: _coordinator,
-                                );
-                              },
-                            ),
-                            ValueListenableBuilder<Duration>(
-                              valueListenable: _coordinator.position,
-                              builder: (context, position, child) {
-                                return TextPreviewLayer(currentTime: position);
-                              },
-                            ),
-                          ],
-                        ),
+                        child: _buildCanvas(state),
                       ),
                       PlaybackControls(
                         loadedState: state,
@@ -197,6 +296,7 @@ class _EditorViewState extends State<EditorView> {
                               TimelineArea(
                                 state: state,
                                 positionNotifier: _coordinator.position,
+                                onAddClip: _onAddMainClip,
                               ),
                               const Align(
                                 alignment: Alignment.center,
@@ -210,17 +310,14 @@ class _EditorViewState extends State<EditorView> {
                     ],
                   ),
 
-                // 2. PROCESSING OVERLAYS
                 if (state.isProcessing &&
                     state.processingType != ProcessingType.export)
                   ProcessingOverlay(processingState: state),
 
-                // 3. EXPORT SCREEN
                 if (state.isProcessing &&
                     state.processingType == ProcessingType.export)
                   ExportingScreen(
                     processingState: state,
-                    // Pass the generated thumbnail path here
                     thumbnailPath: _tempThumbnailPath,
                   ),
               ],
@@ -258,22 +355,14 @@ class _EditorViewState extends State<EditorView> {
                 backgroundColor: Colors.transparent,
                 builder: (_) => const ExportOptionsSheet(),
               );
-
               if (settings != null && context.mounted) {
-                // 1. Pause playback immediately
                 _coordinator.pause();
-
-                // 2. Generate Thumbnail
                 try {
-                  // Find the first video clip to use as a cover
                   final videoTrack = state.project.tracks.firstWhere(
                     (t) => t.type == TrackType.video,
                   );
-
                   if (videoTrack.clips.isNotEmpty) {
                     final firstClip = videoTrack.clips.first as VideoClip;
-
-                    // Use your custom ThumbnailUtils here!
                     _tempThumbnailPath =
                         await ThumbnailUtils.generateAndSaveThumbnail(
                           firstClip.sourcePath,
@@ -282,14 +371,7 @@ class _EditorViewState extends State<EditorView> {
                   }
                 } catch (e) {
                   print("Thumbnail generation failed: $e");
-                  // Proceed anyway, the export screen will just show a placeholder icon
                 }
-
-                // 3. CRITICAL FIX: Dispose the player to free hardware resources
-                await _coordinator.disposePlayerForExport();
-                await Future.delayed(const Duration(milliseconds: 500));
-
-                // 4. Start Export
                 if (context.mounted) {
                   context.read<EditorBloc>().add(ExportStarted(settings));
                 }

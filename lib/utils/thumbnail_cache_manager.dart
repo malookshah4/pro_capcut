@@ -68,7 +68,9 @@ class ThumbnailCacheManager {
 
       if (_memoryCache.containsKey(request.key)) {
         final data = _memoryCache[request.key];
-        for (var c in waitingCompleters) c.complete(data);
+        for (var c in waitingCompleters) {
+          c.complete(data);
+        }
         continue;
       }
 

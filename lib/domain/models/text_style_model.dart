@@ -77,4 +77,26 @@ class TextStyleModel extends HiveObject {
     }
     return style;
   }
+
+  // --- 1. Add toJson (Saving) ---
+  Map<String, dynamic> toJson() {
+    return {
+      'fontName': fontName,
+      'fontSize': fontSize,
+      'primaryColor': primaryColor,
+      'strokeColor': strokeColor,
+      'strokeWidth': strokeWidth,
+    };
+  }
+
+  // --- 2. Add fromJson (Loading) ---
+  factory TextStyleModel.fromJson(Map<String, dynamic> json) {
+    return TextStyleModel(
+      fontName: json['fontName'] ?? 'System',
+      fontSize: (json['fontSize'] as num?)?.toDouble() ?? 32.0,
+      primaryColor: (json['primaryColor'] as num?)?.toInt() ?? 0xFFFFFFFF,
+      strokeColor: (json['strokeColor'] as num?)?.toInt() ?? 0x00000000,
+      strokeWidth: (json['strokeWidth'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
 }

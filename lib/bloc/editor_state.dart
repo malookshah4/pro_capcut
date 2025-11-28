@@ -1,5 +1,3 @@
-// lib/bloc/editor_state.dart
-
 part of 'editor_bloc.dart';
 
 abstract class EditorState extends Equatable {
@@ -18,9 +16,13 @@ class EditorLoaded extends EditorState {
   final String? selectedClipId;
   final ProcessingType? processingType;
   final double processingProgress;
-  // --- NEW: Forces rebuilds when data inside the project changes ---
   final int version;
   final bool isExporting;
+
+  // --- NEW: Undo/Redo Stacks ---
+  // We store copies of the 'Project' object.
+  final List<Project> undoStack;
+  final List<Project> redoStack;
 
   const EditorLoaded({
     required this.project,
@@ -32,16 +34,15 @@ class EditorLoaded extends EditorState {
     this.processingProgress = 0.0,
     this.version = 0,
     this.isExporting = false,
+    this.undoStack = const [],
+    this.redoStack = const [],
   });
 
-  // Helper getter for the main video track
   EditorTrack get videoTrack =>
       project.tracks.firstWhere((t) => t.type == TrackType.video);
 
-  // Helper getter for the project's total duration
   Duration get videoDuration {
     if (videoTrack.clips.isEmpty) return Duration.zero;
-    // Calculate total duration from the main video track
     return videoTrack.clips.fold(
       Duration.zero,
       (prev, clip) => prev + clip.duration,
@@ -49,6 +50,8 @@ class EditorLoaded extends EditorState {
   }
 
   bool get isProcessing => processingType != null;
+  bool get canUndo => undoStack.isNotEmpty;
+  bool get canRedo => redoStack.isNotEmpty;
 
   EditorLoaded copyWith({
     Project? project,
@@ -61,8 +64,10 @@ class EditorLoaded extends EditorState {
     ProcessingType? processingType,
     bool clearProcessing = false,
     double? processingProgress,
-    int? version, // Add version to copyWith
+    int? version,
     bool? isExporting,
+    List<Project>? undoStack,
+    List<Project>? redoStack,
   }) {
     return EditorLoaded(
       project: project ?? this.project,
@@ -80,6 +85,8 @@ class EditorLoaded extends EditorState {
       processingProgress: processingProgress ?? this.processingProgress,
       version: version ?? this.version,
       isExporting: isExporting ?? this.isExporting,
+      undoStack: undoStack ?? this.undoStack,
+      redoStack: redoStack ?? this.redoStack,
     );
   }
 
@@ -92,7 +99,10 @@ class EditorLoaded extends EditorState {
     selectedClipId,
     processingType,
     processingProgress,
-    version, // Include version in props for Equatable
+    version,
+    undoStack
+        .length, // Only track length for equatable to avoid heavy comparisons
+    redoStack.length,
   ];
 }
 

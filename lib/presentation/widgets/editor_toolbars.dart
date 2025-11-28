@@ -32,11 +32,30 @@ class MainToolbar extends StatelessWidget {
         unselectedItemColor: Colors.grey,
         type: BottomNavigationBarType.fixed,
         items: const [
-          BottomNavigationBarItem(icon: Icon(EvaIcons.edit), label: 'Edit'),
-          BottomNavigationBarItem(icon: Icon(EvaIcons.music), label: 'Audio'),
-          BottomNavigationBarItem(icon: Icon(Icons.text_fields), label: 'Text'),
-          BottomNavigationBarItem(icon: Icon(Icons.waves), label: 'Stabilize'),
-          BottomNavigationBarItem(icon: Icon(Icons.layers), label: 'Overlay'),
+          BottomNavigationBarItem(
+            icon: Icon(EvaIcons.edit),
+            label: 'Edit',
+          ), // 0
+          BottomNavigationBarItem(
+            icon: Icon(EvaIcons.music),
+            label: 'Audio',
+          ), // 1
+          BottomNavigationBarItem(
+            icon: Icon(Icons.text_fields),
+            label: 'Text',
+          ), // 2
+          BottomNavigationBarItem(
+            icon: Icon(Icons.aspect_ratio),
+            label: 'Format',
+          ), // 3 (NEW)
+          BottomNavigationBarItem(
+            icon: Icon(Icons.waves),
+            label: 'Stabilize',
+          ), // 4
+          BottomNavigationBarItem(
+            icon: Icon(Icons.layers),
+            label: 'Overlay',
+          ), // 5
         ],
       ),
     );

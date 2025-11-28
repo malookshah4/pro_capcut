@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pro_capcut/bloc/editor_bloc.dart';
@@ -16,11 +16,13 @@ import 'package:pro_capcut/presentation/widgets/timeline_track_widget.dart';
 class TimelineArea extends StatefulWidget {
   final EditorLoaded state;
   final ValueListenable<Duration> positionNotifier;
+  final VoidCallback? onAddClip;
 
   const TimelineArea({
     super.key,
     required this.state,
     required this.positionNotifier,
+    this.onAddClip,
   });
 
   @override
@@ -33,120 +35,139 @@ class _TimelineAreaState extends State<TimelineArea> {
 
   double _pixelsPerSecond = 60.0;
   double _basePixelsPerSecond = 60.0;
-  bool _isInteracting = false;
+
+  // Interaction States
+  bool _isManuallyScrolling = false; // User Drag OR Ballistic Fling
+  bool _isSyncing = false; // Programmatic scroll (Playback)
 
   bool _isTrimming = false;
   bool _isMovingClip = false;
-  Axis? _lockedAxis;
 
-  // --- Haptic State ---
+  // Helper Variables
   double _accumulatedHapticDelta = 0.0;
-
   Timer? _autoScrollTimer;
   double _autoScrollSpeed = 0.0;
 
   @override
   void initState() {
     super.initState();
-    widget.positionNotifier.addListener(_syncScrollWithPosition);
-    _horizontalController.addListener(_onHorizontalScroll);
+    // Listen to the PlaybackCoordinator (Auto-Scroll)
+    widget.positionNotifier.addListener(_syncScrollWithPlayback);
   }
 
   @override
   void dispose() {
     _autoScrollTimer?.cancel();
-    widget.positionNotifier.removeListener(_syncScrollWithPosition);
-    _horizontalController.removeListener(_onHorizontalScroll);
+    widget.positionNotifier.removeListener(_syncScrollWithPlayback);
     _horizontalController.dispose();
     _verticalController.dispose();
     super.dispose();
   }
 
-  void _onHorizontalScroll() {
-    if (_isInteracting && !_isTrimming && !_isMovingClip) {
-      final newPositionMs =
-          (_horizontalController.offset / _pixelsPerSecond) * 1000;
-      context.read<EditorBloc>().add(
-        VideoPositionChanged(Duration(milliseconds: newPositionMs.round())),
-      );
-    }
-  }
+  // --- 1. Auto-Scroll (Playback -> Timeline) ---
+  void _syncScrollWithPlayback() {
+    // If user is interacting, ignore playback updates
+    if (_isManuallyScrolling || _isTrimming || _isMovingClip) return;
 
-  void _syncScrollWithPosition() {
-    if (_isInteracting) return;
     final currentPosSeconds =
-        widget.positionNotifier.value.inMilliseconds / 1000;
+        widget.positionNotifier.value.inMilliseconds / 1000.0;
     final expectedOffset = currentPosSeconds * _pixelsPerSecond;
+
     if (_horizontalController.hasClients) {
-      if ((_horizontalController.offset - expectedOffset).abs() > 1.0) {
-        _horizontalController.jumpTo(expectedOffset);
+      // Always sync if playing to ensure smooth scrolling during transitions
+      if (widget.state.isPlaying) {
+        _isSyncing = true; // Lock to prevent feedback loop
+        _horizontalController.jumpTo(expectedOffset.clamp(
+          0.0,
+          _horizontalController.position.maxScrollExtent,
+        ));
+        _isSyncing = false; // Unlock
+      } else {
+        // Only jump if the difference is significant when paused (prevents jitter)
+        if ((_horizontalController.offset - expectedOffset).abs() > 2.0) {
+          _isSyncing = true;
+          _horizontalController.jumpTo(expectedOffset.clamp(
+            0.0,
+            _horizontalController.position.maxScrollExtent,
+          ));
+          _isSyncing = false;
+        }
       }
     }
   }
 
+  // --- 2. Manual Scroll (Timeline -> Video Frame) ---
+  bool _onNotification(ScrollNotification notification) {
+    // Check if this notification comes from the Horizontal controller
+    if (notification.depth != 0) return false;
+
+    if (notification is ScrollStartNotification) {
+      if (!_isSyncing) {
+        // Only if NOT initiated by playback sync
+        _isManuallyScrolling = true;
+        if (widget.state.isPlaying) {
+          context.read<EditorBloc>().add(const PlaybackStatusChanged(false));
+        }
+      }
+    } else if (notification is ScrollUpdateNotification) {
+      if (_isManuallyScrolling && _horizontalController.hasClients) {
+        _updateVideoFromScroll();
+      }
+    } else if (notification is ScrollEndNotification) {
+      if (_isManuallyScrolling) {
+        // Snap / Final update
+        _updateVideoFromScroll();
+        _isManuallyScrolling = false;
+      }
+    }
+    return true;
+  }
+
+  void _updateVideoFromScroll() {
+    final newPositionMs =
+        (_horizontalController.offset / _pixelsPerSecond) * 1000;
+    final clampedMs = newPositionMs < 0 ? 0 : newPositionMs.round();
+
+    // Send SEEK request to Bloc
+    context.read<EditorBloc>().add(
+      VideoPositionChanged(Duration(milliseconds: clampedMs)),
+    );
+  }
+
+  // --- Zoom Logic ---
   void _onScaleStart(ScaleStartDetails details) {
     if (_isTrimming || _isMovingClip) return;
-    setState(() {
-      _isInteracting = true;
-      _lockedAxis = null;
-    });
     _basePixelsPerSecond = _pixelsPerSecond;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
     if (_isTrimming || _isMovingClip) return;
+
     final bool isZooming = (details.scale - 1.0).abs() > 0.05;
     if (isZooming) {
       final newScale = (_basePixelsPerSecond * details.scale).clamp(
         10.0,
         400.0,
       );
+
+      // Maintain relative position
       final currentTimeSeconds =
           widget.positionNotifier.value.inMilliseconds / 1000.0;
       final newScrollOffset = currentTimeSeconds * newScale;
+
       setState(() => _pixelsPerSecond = newScale);
-      if (_horizontalController.hasClients)
+
+      if (_horizontalController.hasClients) {
         _horizontalController.jumpTo(newScrollOffset);
-    } else {
-      final double deltaX = details.focalPointDelta.dx;
-      final double deltaY = details.focalPointDelta.dy;
-      if (_lockedAxis == null) {
-        if (deltaX.abs() > deltaY.abs() && deltaX.abs() > 2.0)
-          _lockedAxis = Axis.horizontal;
-        else if (deltaY.abs() > deltaX.abs() && deltaY.abs() > 2.0)
-          _lockedAxis = Axis.vertical;
-      }
-      if (_lockedAxis == Axis.horizontal && _horizontalController.hasClients) {
-        final double newOffset = _horizontalController.offset - deltaX;
-        final double max = _horizontalController.position.maxScrollExtent;
-        final double min = _horizontalController.position.minScrollExtent;
-        _horizontalController.jumpTo(newOffset.clamp(min, max));
-      } else if (_lockedAxis == Axis.vertical &&
-          _verticalController.hasClients) {
-        final double newOffset = _verticalController.offset - deltaY;
-        final double max = _verticalController.position.maxScrollExtent;
-        final double min = _verticalController.position.minScrollExtent;
-        _verticalController.jumpTo(newOffset.clamp(min, max));
       }
     }
   }
 
-  void _onScaleEnd(ScaleEndDetails details) {
-    if (_isTrimming || _isMovingClip) return;
-    setState(() {
-      _isInteracting = false;
-      _lockedAxis = null;
-    });
-  }
-
+  // --- Clip Moving Logic ---
   void _onClipMoveStart() {
-    setState(() {
-      _isMovingClip = true;
-      _accumulatedHapticDelta = 0.0;
-    });
+    setState(() => _isMovingClip = true);
   }
 
-  // --- FIX: Accept clipId here explicitly ---
   void _onClipMoveUpdate(
     String trackId,
     String clipId,
@@ -162,7 +183,6 @@ class _TimelineAreaState extends State<TimelineArea> {
     final double deltaSeconds = deltaPixels / _pixelsPerSecond;
     final int deltaMicroseconds = (deltaSeconds * 1000000).round();
 
-    // Use the passed clipId, NOT state.selectedClipId!
     context.read<EditorBloc>().add(
       ClipMoved(
         trackId: trackId,
@@ -171,17 +191,15 @@ class _TimelineAreaState extends State<TimelineArea> {
       ),
     );
 
+    // Edge Auto-Scroll
     final screenWidth = MediaQuery.of(context).size.width;
     final touchX = details.globalPosition.dx;
-    const edgeThreshold = 50.0;
-
-    if (touchX < edgeThreshold) {
+    if (touchX < 50)
       _startAutoScroll(-10.0, trackId, clipId);
-    } else if (touchX > screenWidth - edgeThreshold) {
+    else if (touchX > screenWidth - 50)
       _startAutoScroll(10.0, trackId, clipId);
-    } else {
+    else
       _stopAutoScroll();
-    }
   }
 
   void _onClipMoveEnd() {
@@ -191,38 +209,28 @@ class _TimelineAreaState extends State<TimelineArea> {
   }
 
   void _startAutoScroll(double speed, String trackId, String clipId) {
-    if (_autoScrollTimer != null && _autoScrollSpeed == speed) return;
+    if (_autoScrollTimer != null) return;
     _autoScrollSpeed = speed;
-    _autoScrollTimer?.cancel();
-    _autoScrollTimer = Timer.periodic(const Duration(milliseconds: 16), (
-      timer,
-    ) {
+    _autoScrollTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
       if (!_horizontalController.hasClients) return;
-      final currentOffset = _horizontalController.offset;
-      final newOffset = currentOffset + _autoScrollSpeed;
-      final maxOffset = _horizontalController.position.maxScrollExtent;
+      final newOffset = _horizontalController.offset + _autoScrollSpeed;
+      _horizontalController.jumpTo(newOffset);
 
-      if (newOffset >= 0 && newOffset <= maxOffset) {
-        _horizontalController.jumpTo(newOffset);
-
-        final double deltaSeconds = _autoScrollSpeed / _pixelsPerSecond;
-        final int deltaMicroseconds = (deltaSeconds * 1000000).round();
-
-        context.read<EditorBloc>().add(
-          ClipMoved(
-            trackId: trackId,
-            clipId: clipId,
-            delta: Duration(microseconds: deltaMicroseconds),
-          ),
-        );
-      }
+      final double deltaSeconds = _autoScrollSpeed / _pixelsPerSecond;
+      final int deltaMicroseconds = (deltaSeconds * 1000000).round();
+      context.read<EditorBloc>().add(
+        ClipMoved(
+          trackId: trackId,
+          clipId: clipId,
+          delta: Duration(microseconds: deltaMicroseconds),
+        ),
+      );
     });
   }
 
   void _stopAutoScroll() {
     _autoScrollTimer?.cancel();
     _autoScrollTimer = null;
-    _autoScrollSpeed = 0.0;
   }
 
   @override
@@ -233,11 +241,13 @@ class _TimelineAreaState extends State<TimelineArea> {
     final List<EditorTrack> overlayTracks = widget.state.project.tracks
         .where((t) => t.type != TrackType.video)
         .toList();
-    if (videoTrack == null)
-      return const Center(child: Text("Error: No video track found."));
 
-    final double totalContentWidth =
+    if (videoTrack == null) return const Center(child: Text("No Video Track"));
+
+    // Buffer ensures we can scroll past the last clip to reach the + button
+    final double contentWidth =
         (widget.state.videoDuration.inMilliseconds / 1000) * _pixelsPerSecond;
+    final double totalScrollableWidth = contentWidth + 200.0;
     final screenWidth = MediaQuery.of(context).size.width;
 
     return Column(
@@ -245,102 +255,127 @@ class _TimelineAreaState extends State<TimelineArea> {
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              return RawGestureDetector(
-                behavior: HitTestBehavior.opaque,
-                gestures: {
-                  _AllowMultipleScaleRecognizer:
-                      GestureRecognizerFactoryWithHandlers<
-                        _AllowMultipleScaleRecognizer
-                      >(() => _AllowMultipleScaleRecognizer(), (instance) {
-                        instance.onStart = _onScaleStart;
-                        instance.onUpdate = _onScaleUpdate;
-                        instance.onEnd = _onScaleEnd;
-                      }),
-                },
-                child: SingleChildScrollView(
-                  controller: _horizontalController,
-                  scrollDirection: Axis.horizontal,
-                  physics: const NeverScrollableScrollPhysics(),
-                  child: SizedBox(
-                    width: totalContentWidth + screenWidth,
-                    height: constraints.maxHeight,
-                    child: Column(
-                      children: [
-                        const SizedBox(height: 20),
-
-                        // Main Video Track
-                        TimelineTrackWidget(
-                          track: videoTrack,
-                          pixelsPerSecond: _pixelsPerSecond,
-                          horizontalPadding: screenWidth / 2,
-                          selectedClipId: widget.state.selectedClipId,
-                          onClipTapped: (trackId, clipId) =>
-                              context.read<EditorBloc>().add(
-                                ClipTapped(trackId: trackId, clipId: clipId),
+              return Stack(
+                children: [
+                  // 1. SCROLLABLE TIMELINE
+                  NotificationListener<ScrollNotification>(
+                    onNotification: _onNotification,
+                    child: RawGestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      gestures: {
+                        _AllowMultipleScaleRecognizer:
+                            GestureRecognizerFactoryWithHandlers<
+                              _AllowMultipleScaleRecognizer
+                            >(() => _AllowMultipleScaleRecognizer(), (
+                              instance,
+                            ) {
+                              instance.onStart = _onScaleStart;
+                              instance.onUpdate = _onScaleUpdate;
+                            }),
+                      },
+                      child: SingleChildScrollView(
+                        controller: _horizontalController,
+                        scrollDirection: Axis.horizontal,
+                        physics:
+                            const ClampingScrollPhysics(), // Better for timelines
+                        child: SizedBox(
+                          width: totalScrollableWidth + screenWidth,
+                          height: constraints.maxHeight,
+                          child: Column(
+                            children: [
+                              const SizedBox(height: 20),
+                              // Main Track
+                              TimelineTrackWidget(
+                                track: videoTrack,
+                                pixelsPerSecond: _pixelsPerSecond,
+                                horizontalPadding: screenWidth / 2,
+                                selectedClipId: widget.state.selectedClipId,
+                                onClipTapped: (tid, cid) => context
+                                    .read<EditorBloc>()
+                                    .add(ClipTapped(trackId: tid, clipId: cid)),
+                                onTrimStart: () =>
+                                    setState(() => _isTrimming = true),
+                                onTrimEnd: () {
+                                  setState(() => _isTrimming = false);
+                                  context.read<EditorBloc>().add(
+                                    ClipRippleRequested(videoTrack.id),
+                                  );
+                                },
                               ),
-                          onTrimStart: () => setState(() => _isTrimming = true),
-                          onTrimEnd: () {
-                            setState(() => _isTrimming = false);
-                            context.read<EditorBloc>().add(
-                              ClipRippleRequested(videoTrack.id),
-                            );
-                          },
-                        ),
-
-                        // Overlay Tracks (Scrollable)
-                        Expanded(
-                          child: SingleChildScrollView(
-                            controller: _verticalController,
-                            scrollDirection: Axis.vertical,
-                            physics: const NeverScrollableScrollPhysics(),
-                            child: Column(
-                              children: [
-                                if (overlayTracks.isNotEmpty)
-                                  ...overlayTracks.map((track) {
-                                    return TimelineTrackWidget(
-                                      track: track,
-                                      pixelsPerSecond: _pixelsPerSecond,
-                                      horizontalPadding: screenWidth / 2,
-                                      selectedClipId:
-                                          widget.state.selectedClipId,
-                                      onClipTapped: (trackId, clipId) =>
-                                          context.read<EditorBloc>().add(
-                                            ClipTapped(
-                                              trackId: trackId,
-                                              clipId: clipId,
-                                            ),
+                              // Overlay Tracks
+                              Expanded(
+                                child: SingleChildScrollView(
+                                  controller: _verticalController,
+                                  physics: const ClampingScrollPhysics(),
+                                  child: Column(
+                                    children: [
+                                      ...overlayTracks.map(
+                                        (t) => TimelineTrackWidget(
+                                          track: t,
+                                          pixelsPerSecond: _pixelsPerSecond,
+                                          horizontalPadding: screenWidth / 2,
+                                          selectedClipId:
+                                              widget.state.selectedClipId,
+                                          onClipTapped: (tid, cid) =>
+                                              context.read<EditorBloc>().add(
+                                                ClipTapped(
+                                                  trackId: tid,
+                                                  clipId: cid,
+                                                ),
+                                              ),
+                                          onTrimStart: () => setState(
+                                            () => _isTrimming = true,
                                           ),
-                                      onTrimStart: () =>
-                                          setState(() => _isTrimming = true),
-                                      onTrimEnd: () {
-                                        setState(() => _isTrimming = false);
-                                        context.read<EditorBloc>().add(
-                                          EditorProjectSaved(),
-                                        );
-                                      },
-                                      onMoveStart: _onClipMoveStart,
-
-                                      // --- FIX: Correctly receiving 3 arguments from child ---
-                                      onMoveUpdate: (clipId, delta, details) =>
-                                          _onClipMoveUpdate(
-                                            track.id,
-                                            clipId,
-                                            delta,
-                                            details,
-                                          ),
-
-                                      onMoveEnd: _onClipMoveEnd,
-                                    );
-                                  }),
-                                const SizedBox(height: 100),
-                              ],
-                            ),
+                                          onTrimEnd: () {
+                                            setState(() => _isTrimming = false);
+                                            context.read<EditorBloc>().add(
+                                              EditorProjectSaved(),
+                                            );
+                                          },
+                                          onMoveStart: _onClipMoveStart,
+                                          onMoveUpdate: (cid, d, det) =>
+                                              _onClipMoveUpdate(
+                                                t.id,
+                                                cid,
+                                                d,
+                                                det,
+                                              ),
+                                          onMoveEnd: _onClipMoveEnd,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 100),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+
+                  // 2. FIXED "ADD CLIP" BUTTON
+                  Positioned(
+                    right: 16,
+                    top: 30,
+                    child: GestureDetector(
+                      onTap: widget.onAddClip,
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(color: Colors.black54, blurRadius: 4),
+                          ],
+                        ),
+                        child: const Icon(Icons.add, color: Colors.black),
+                      ),
+                    ),
+                  ),
+                ],
               );
             },
           ),
@@ -361,11 +396,10 @@ class _TimelineAreaState extends State<TimelineArea> {
             FilePickerResult? result = await FilePicker.platform.pickFiles(
               type: FileType.audio,
             );
-            if (result != null && context.mounted) {
+            if (result != null && mounted)
               context.read<EditorBloc>().add(
                 AudioTrackAdded(File(result.files.single.path!)),
               );
-            }
           }),
           _buildButton(Icons.text_fields, "Text", () async {
             final result = await showModalBottomSheet<TextEditorResult>(
@@ -374,22 +408,20 @@ class _TimelineAreaState extends State<TimelineArea> {
               isScrollControlled: true,
               builder: (_) => const TextEditorSheet(),
             );
-            if (result != null && context.mounted) {
+            if (result != null && mounted)
               context.read<EditorBloc>().add(
                 TextTrackAdded(result.text, result.style),
               );
-            }
           }),
           _buildButton(Icons.video_library, "Overlay", () async {
             final ImagePicker picker = ImagePicker();
             final XFile? video = await picker.pickVideo(
               source: ImageSource.gallery,
             );
-            if (video != null && context.mounted) {
+            if (video != null && mounted)
               context.read<EditorBloc>().add(
                 OverlayTrackAdded(File(video.path)),
               );
-            }
           }),
         ],
       ),

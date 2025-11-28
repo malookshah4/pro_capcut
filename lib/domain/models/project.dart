@@ -22,10 +22,30 @@ class Project extends HiveObject {
 
   // Field 5 (textClips) is also now empty
 
+  @HiveField(6)
+  double? canvasAspectRatio;
+
   Project({
     required this.id,
     required this.lastModified,
     required this.tracks,
     this.thumbnailPath,
+    this.canvasAspectRatio, // <--- CHANGED: Was "double? canvasAspectRatio"
   });
+
+  Project copyWith({
+    String? id,
+    DateTime? lastModified,
+    List<EditorTrack>? tracks,
+    String? thumbnailPath,
+    double? canvasAspectRatio,
+  }) {
+    return Project(
+      id: id ?? this.id,
+      lastModified: lastModified ?? this.lastModified,
+      tracks: tracks ?? this.tracks,
+      thumbnailPath: thumbnailPath ?? this.thumbnailPath,
+      canvasAspectRatio: canvasAspectRatio ?? this.canvasAspectRatio,
+    );
+  }
 }

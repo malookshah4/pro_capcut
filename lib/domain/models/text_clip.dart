@@ -63,4 +63,38 @@ class TextClip extends TimelineClip {
       rotation: rotation ?? this.rotation,
     );
   }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'type': 'text',
+      'text': text,
+      'style': style.toJson(), // Ensure TextStyleModel also has toJson
+      'startTimeInTimeline': startTimeInTimelineInMicroseconds,
+      'duration': durationInMicroseconds,
+
+      // SAVE THESE FIELDS
+      'offsetX': offsetX,
+      'offsetY': offsetY,
+      'scale': scale,
+      'rotation': rotation,
+    };
+  }
+
+  factory TextClip.fromJson(Map<String, dynamic> json) {
+    return TextClip(
+      id: json['id'],
+      text: json['text'],
+      style: TextStyleModel.fromJson(json['style']),
+      startTimeInTimelineInMicroseconds: json['startTimeInTimeline'],
+      durationInMicroseconds: json['duration'],
+
+      // LOAD THESE FIELDS
+      offsetX: (json['offsetX'] as num?)?.toDouble() ?? 0.5,
+      offsetY: (json['offsetY'] as num?)?.toDouble() ?? 0.5,
+      scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
+      rotation: (json['rotation'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
 }

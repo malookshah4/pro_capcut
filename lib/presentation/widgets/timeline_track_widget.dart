@@ -7,8 +7,9 @@ import 'package:pro_capcut/domain/models/editor_track.dart';
 import 'package:pro_capcut/domain/models/text_clip.dart';
 import 'package:pro_capcut/domain/models/timeline_clip.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
+import 'package:pro_capcut/presentation/widgets/transition_selection_sheet.dart';
 import 'package:pro_capcut/presentation/widgets/trimming_handles.dart';
-import 'package:pro_capcut/presentation/widgets/video_timeline_strip.dart'; // Import Strip
+import 'package:pro_capcut/presentation/widgets/video_timeline_strip.dart';
 
 class TimelineTrackWidget extends StatelessWidget {
   final EditorTrack track;
@@ -18,11 +19,12 @@ class TimelineTrackWidget extends StatelessWidget {
   final Function(String trackId, String clipId) onClipTapped;
   final VoidCallback? onTrimStart;
   final VoidCallback? onTrimEnd;
-
   final VoidCallback? onMoveStart;
   final Function(String clipId, double deltaPixels, DragUpdateDetails details)?
   onMoveUpdate;
   final VoidCallback? onMoveEnd;
+
+  // Removed onAddClip since we handle it in TimelineArea now
 
   const TimelineTrackWidget({
     super.key,
@@ -42,6 +44,15 @@ class TimelineTrackWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final List<TimelineClip> normalClips = [];
     TimelineClip? selectedClip;
+
+    List<TimelineClip> sortedClips = List.from(track.clips);
+    if (track.type == TrackType.video) {
+      sortedClips.sort(
+        (a, b) => a.startTimeInTimelineInMicroseconds.compareTo(
+          b.startTimeInTimelineInMicroseconds,
+        ),
+      );
+    }
 
     for (var clip in track.clips) {
       final tClip = clip as TimelineClip;
@@ -68,11 +79,80 @@ class TimelineTrackWidget extends StatelessWidget {
             child: Stack(
               clipBehavior: Clip.none,
               children: [
+                // 1. Render Clips
                 ...normalClips
                     .map((clip) => _buildClipWidget(context, clip))
                     .toList(),
+
                 if (selectedClip != null)
                   _buildClipWidget(context, selectedClip),
+
+                // 2. Render Transition Buttons (Only between clips)
+                if (track.type == TrackType.video && sortedClips.length > 1)
+                  ...List.generate(sortedClips.length - 1, (index) {
+                    final currentClip = sortedClips[index];
+                    final nextClip = sortedClips[index + 1] as VideoClip;
+
+                    final int endTimeMicros =
+                        currentClip.startTimeInTimelineInMicroseconds +
+                        currentClip.durationInMicroseconds;
+
+                    final double cutPointSeconds = endTimeMicros / 1000000.0;
+                    final double leftPos =
+                        (cutPointSeconds * pixelsPerSecond) - 12;
+
+                    return Positioned(
+                      left: leftPos,
+                      top: 18,
+                      child: GestureDetector(
+                        onTap: () async {
+                          final result =
+                              await showModalBottomSheet<Map<String, dynamic>>(
+                                context: context,
+                                backgroundColor: Colors.transparent,
+                                builder: (_) => TransitionSelectionSheet(
+                                  currentType: nextClip.transitionType,
+                                  currentDuration: Duration(
+                                    microseconds:
+                                        nextClip.transitionDurationMicroseconds,
+                                  ),
+                                ),
+                              );
+
+                          if (result != null && context.mounted) {
+                            context.read<EditorBloc>().add(
+                              ClipTransitionChanged(
+                                trackId: track.id,
+                                clipId: nextClip.id,
+                                transitionType: result['type'],
+                                duration: result['duration'],
+                              ),
+                            );
+                          }
+                        },
+                        child: Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: nextClip.transitionType != null
+                                ? Colors.blueAccent
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.black54),
+                          ),
+                          child: Icon(
+                            nextClip.transitionType != null
+                                ? Icons.all_inclusive
+                                : Icons.remove,
+                            size: 16,
+                            color: nextClip.transitionType != null
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
               ],
             ),
           ),
@@ -90,7 +170,6 @@ class TimelineTrackWidget extends StatelessWidget {
 
     Widget child;
     if (clip is VideoClip) {
-      // --- UPDATED: Pass width to the strip ---
       child = _VideoClipWidget(clip: clip, width: width);
     } else if (clip is AudioClip) {
       child = _AudioClipWidget(clip: clip);
@@ -142,33 +221,50 @@ class TimelineTrackWidget extends StatelessWidget {
               onDragEnd: () => onTrimEnd?.call(),
               child: bodyContent,
             )
-          : Container(
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(4)),
-              child: bodyContent,
-            ),
+          : bodyContent, // Just return body, no decoration wrapper to avoid gaps
     );
   }
 }
 
-// --- Helper Widgets ---
+// --- Helper Widgets (FIXED GAPS) ---
 
-// --- UPDATED: Now uses VideoTimelineStrip ---
 class _VideoClipWidget extends StatelessWidget {
   final VideoClip clip;
-  final double width; // Needed for calculations
+  final double width;
   const _VideoClipWidget({required this.clip, required this.width});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(4),
-        // Clip the strip to round corners
+      decoration: const BoxDecoration(
+        color: Color(0xFF1C1C1C), // Dark background matching strip
+        // NO BORDER RADIUS
+        // Optional: Tiny white separator line like CapCut
+        border: Border(right: BorderSide(color: Colors.white12, width: 1)),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: VideoTimelineStrip(clip: clip, clipWidth: width, clipHeight: 50),
+      child: Stack(
+        children: [
+          // Removed ClipRRect here!
+          VideoTimelineStrip(clip: clip, clipWidth: width, clipHeight: 50),
+
+          if (clip.transitionType != null)
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 20,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.blueAccent.withOpacity(0.5),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -179,9 +275,10 @@ class _AudioClipWidget extends StatelessWidget {
   const _AudioClipWidget({required this.clip});
   @override
   Widget build(BuildContext context) {
+    // Audio clips usually look better with rounded corners (bubbles)
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF4CAF50), // CapCut Audio Green/Teal
+        color: const Color(0xFF4CAF50),
         borderRadius: BorderRadius.circular(4),
         border: Border.all(color: Colors.white24, width: 0.5),
       ),
@@ -190,7 +287,6 @@ class _AudioClipWidget extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Visual waveform placeholder line
             Container(height: 1, color: Colors.white54),
             const SizedBox(height: 2),
             const Text(
@@ -212,9 +308,10 @@ class _TextClipWidget extends StatelessWidget {
   const _TextClipWidget({required this.clip});
   @override
   Widget build(BuildContext context) {
+    // Text clips also look better rounded
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFE91E63), // Pink/Red for Text
+        color: const Color(0xFFE91E63),
         borderRadius: BorderRadius.circular(4),
       ),
       child: ClipRRect(
@@ -274,7 +371,6 @@ class _TrackLabel extends StatelessWidget {
   }
 }
 
-// --- Gesture Handler (Same as before) ---
 class _ClipGestureHandler extends StatefulWidget {
   final TrackType trackType;
   final bool isSelected;
@@ -283,7 +379,6 @@ class _ClipGestureHandler extends StatefulWidget {
   final Function(double, DragUpdateDetails)? onMoveUpdate;
   final VoidCallback? onMoveEnd;
   final Widget child;
-
   const _ClipGestureHandler({
     required this.trackType,
     required this.isSelected,
@@ -293,7 +388,6 @@ class _ClipGestureHandler extends StatefulWidget {
     this.onMoveEnd,
     required this.child,
   });
-
   @override
   State<_ClipGestureHandler> createState() => _ClipGestureHandlerState();
 }
@@ -301,7 +395,6 @@ class _ClipGestureHandler extends StatefulWidget {
 class _ClipGestureHandlerState extends State<_ClipGestureHandler> {
   bool _isDragging = false;
   double _lastGlobalX = 0.0;
-
   void _endDrag() {
     if (_isDragging) {
       setState(() => _isDragging = false);
@@ -317,17 +410,11 @@ class _ClipGestureHandlerState extends State<_ClipGestureHandler> {
 
     return GestureDetector(
       onTap: widget.onTap,
-
       onLongPressStart: (details) {
-        // --- FIX: PREVENT DRAG IF NOT SELECTED ---
         if (!widget.isSelected) {
-          // If not selected, just select it and EXIT.
-          // Do NOT start drag, do NOT vibrate heavy, do NOT lock scrolls.
           widget.onTap();
           return;
         }
-
-        // If already selected, START DRAG MODE
         HapticFeedback.heavyImpact();
         setState(() {
           _isDragging = true;
@@ -335,29 +422,23 @@ class _ClipGestureHandlerState extends State<_ClipGestureHandler> {
         });
         widget.onMoveStart?.call();
       },
-
       onLongPressMoveUpdate: (details) {
-        // Only move if we successfully started dragging
         if (_isDragging) {
           final double currentGlobalX = details.globalPosition.dx;
           final double delta = currentGlobalX - _lastGlobalX;
           _lastGlobalX = currentGlobalX;
-
           final dragDetails = DragUpdateDetails(
             globalPosition: details.globalPosition,
             localPosition: details.localPosition,
             delta: Offset(delta, 0),
             primaryDelta: delta,
           );
-
           widget.onMoveUpdate?.call(delta, dragDetails);
         }
       },
-
       onLongPressEnd: (_) => _endDrag(),
       onLongPressUp: () => _endDrag(),
       onLongPressCancel: () => _endDrag(),
-
       child: Opacity(opacity: _isDragging ? 0.7 : 1.0, child: widget.child),
     );
   }

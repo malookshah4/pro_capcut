@@ -28,13 +28,17 @@ class VideoClipAdapter extends TypeAdapter<VideoClip> {
       speed: fields[8] == null ? 1.0 : fields[8] as double,
       volume: fields[9] == null ? 1.0 : fields[9] as double,
       thumbnailPath: fields[10] as String?,
+      offsetX: fields[11] == null ? 0.5 : fields[11] as double,
+      offsetY: fields[12] == null ? 0.5 : fields[12] as double,
+      scale: fields[13] == null ? 1.0 : fields[13] as double,
+      rotation: fields[14] == null ? 0.0 : fields[14] as double,
     );
   }
 
   @override
   void write(BinaryWriter writer, VideoClip obj) {
     writer
-      ..writeByte(11)
+      ..writeByte(15)
       ..writeByte(3)
       ..write(obj.sourcePath)
       ..writeByte(4)
@@ -51,6 +55,14 @@ class VideoClipAdapter extends TypeAdapter<VideoClip> {
       ..write(obj.volume)
       ..writeByte(10)
       ..write(obj.thumbnailPath)
+      ..writeByte(11)
+      ..write(obj.offsetX)
+      ..writeByte(12)
+      ..write(obj.offsetY)
+      ..writeByte(13)
+      ..write(obj.scale)
+      ..writeByte(14)
+      ..write(obj.rotation)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)

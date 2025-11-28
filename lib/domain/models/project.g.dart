@@ -21,13 +21,14 @@ class ProjectAdapter extends TypeAdapter<Project> {
       lastModified: fields[1] as DateTime,
       tracks: (fields[2] as List).cast<EditorTrack>(),
       thumbnailPath: fields[3] as String?,
+      canvasAspectRatio: fields[6] as double?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Project obj) {
     writer
-      ..writeByte(4)
+      ..writeByte(5)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -35,7 +36,9 @@ class ProjectAdapter extends TypeAdapter<Project> {
       ..writeByte(2)
       ..write(obj.tracks)
       ..writeByte(3)
-      ..write(obj.thumbnailPath);
+      ..write(obj.thumbnailPath)
+      ..writeByte(6)
+      ..write(obj.canvasAspectRatio);
   }
 
   @override

@@ -9,7 +9,6 @@ import 'package:video_player/video_player.dart';
 class OverlayPreviewLayer extends StatelessWidget {
   final Duration currentTime;
   final PlaybackCoordinator coordinator;
-
   const OverlayPreviewLayer({
     super.key,
     required this.currentTime,
@@ -20,7 +19,6 @@ class OverlayPreviewLayer extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<EditorBloc>().state;
     if (state is! EditorLoaded) return const SizedBox.shrink();
-
     final List<Map<String, dynamic>> activeOverlays = [];
 
     for (final track in state.project.tracks) {
@@ -54,7 +52,10 @@ class OverlayPreviewLayer extends StatelessWidget {
               trackId: trackId,
               viewportSize: Size(constraints.maxWidth, constraints.maxHeight),
               isSelected: state.selectedClipId == clip.id,
-              aspectRatio: controller.value.aspectRatio,
+              // Pass the REAL video aspect ratio
+              nativeAspectRatio: controller.value.aspectRatio,
+              // Pass the REAL video size for FittedBox
+              videoSize: controller.value.size,
               child: VideoPlayer(controller),
             );
           }).toList(),
@@ -69,7 +70,8 @@ class _InteractiveOverlay extends StatefulWidget {
   final String trackId;
   final Size viewportSize;
   final bool isSelected;
-  final double aspectRatio;
+  final double nativeAspectRatio;
+  final Size videoSize;
   final Widget child;
 
   const _InteractiveOverlay({
@@ -78,7 +80,8 @@ class _InteractiveOverlay extends StatefulWidget {
     required this.trackId,
     required this.viewportSize,
     required this.isSelected,
-    required this.aspectRatio,
+    required this.nativeAspectRatio,
+    required this.videoSize,
     required this.child,
   });
 
@@ -97,7 +100,7 @@ class _InteractiveOverlayState extends State<_InteractiveOverlay> {
     _baseRotation = widget.clip.rotation;
     _startFocalPoint = details.focalPoint;
 
-    // Calculate current pixel position from normalized (0.0 - 1.0)
+    // Calculate relative to the CANVAS size, not the screen
     _baseOffset = Offset(
       widget.clip.offsetX * widget.viewportSize.width,
       widget.clip.offsetY * widget.viewportSize.height,
@@ -114,13 +117,12 @@ class _InteractiveOverlayState extends State<_InteractiveOverlay> {
     final Offset deltaPixel = details.focalPoint - _startFocalPoint;
     final Offset newPosPixels = _baseOffset + deltaPixel;
 
-    // Normalize back to 0.0 - 1.0
+    // Normalize position (0.0 - 1.0) relative to the current Canvas Size
     final double normX = newPosPixels.dx / widget.viewportSize.width;
     final double normY = newPosPixels.dy / widget.viewportSize.height;
 
     double newScale = _baseScale * details.scale;
-    if (newScale < 0.15) newScale = 0.15;
-
+    if (newScale < 0.1) newScale = 0.1; // Min size limit
     final double newRotation = _baseRotation + details.rotation;
 
     context.read<EditorBloc>().add(
@@ -141,22 +143,24 @@ class _InteractiveOverlayState extends State<_InteractiveOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    // Align uses -1.0 to 1.0, we store 0.0 to 1.0
+    // 1. Calculate Alignment (-1.0 to 1.0)
     final alignX = (widget.clip.offsetX - 0.5) * 2;
     final alignY = (widget.clip.offsetY - 0.5) * 2;
 
-    // Padding increases as video gets smaller so it's easier to grab
+    // 2. Handle Sizes
+    // Scale handle sizes inversely so they stay constant visual size
     final safeScale = widget.clip.scale < 0.1 ? 0.1 : widget.clip.scale;
     final double inversePadding = 20.0 / safeScale;
     final double handleSize = 12.0 / safeScale;
     final double borderThickness = 2.0 / safeScale;
 
+    // 3. Determine Base Width (Relative to Canvas Width)
+    // This ensures if Canvas shrinks, Overlay shrinks visually (50->40 behavior)
     final double baseWidth = widget.viewportSize.width * 0.5;
 
     return Align(
       alignment: Alignment(alignX, alignY),
       child: GestureDetector(
-        // CRITICAL: Allows dragging on transparent padding area
         behavior: HitTestBehavior.translucent,
         onTap: () {
           context.read<EditorBloc>().add(
@@ -177,8 +181,10 @@ class _InteractiveOverlayState extends State<_InteractiveOverlay> {
                 clipBehavior: Clip.none,
                 alignment: Alignment.center,
                 children: [
+                  // --- THE ANTI-STRETCH FIX ---
                   Container(
                     width: baseWidth,
+                    // We don't set height; AspectRatio controls it
                     decoration: widget.isSelected
                         ? BoxDecoration(
                             border: Border.all(
@@ -188,32 +194,47 @@ class _InteractiveOverlayState extends State<_InteractiveOverlay> {
                           )
                         : null,
                     child: AspectRatio(
-                      aspectRatio: widget.aspectRatio,
-                      child: widget.child,
+                      // Force the container to match the video's aspect ratio
+                      aspectRatio: widget.nativeAspectRatio,
+                      // FittedBox ensures the video content NEVER distorts
+                      // even if rounding errors occur.
+                      child: FittedBox(
+                        fit: BoxFit.cover,
+                        child: SizedBox(
+                          width: widget.videoSize.width,
+                          height: widget.videoSize.height,
+                          child: widget.child,
+                        ),
+                      ),
                     ),
                   ),
 
+                  // Handles
                   if (widget.isSelected) ...[
-                    Positioned(
-                      left: -handleSize / 2,
-                      top: -handleSize / 2,
-                      child: _CornerHandle(size: handleSize),
-                    ),
-                    Positioned(
+                    _buildHandle(
+                      -handleSize / 2,
+                      -handleSize / 2,
+                      handleSize,
+                    ), // Top-Left
+                    _buildHandle(
+                      null,
+                      -handleSize / 2,
+                      handleSize,
                       right: -handleSize / 2,
-                      top: -handleSize / 2,
-                      child: _CornerHandle(size: handleSize),
-                    ),
-                    Positioned(
-                      left: -handleSize / 2,
+                    ), // Top-Right
+                    _buildHandle(
+                      -handleSize / 2,
+                      null,
+                      handleSize,
                       bottom: -handleSize / 2,
-                      child: _CornerHandle(size: handleSize),
-                    ),
-                    Positioned(
+                    ), // Bottom-Left
+                    _buildHandle(
+                      null,
+                      null,
+                      handleSize,
                       right: -handleSize / 2,
                       bottom: -handleSize / 2,
-                      child: _CornerHandle(size: handleSize),
-                    ),
+                    ), // Bottom-Right
                   ],
                 ],
               ),
@@ -223,21 +244,27 @@ class _InteractiveOverlayState extends State<_InteractiveOverlay> {
       ),
     );
   }
-}
 
-class _CornerHandle extends StatelessWidget {
-  final double size;
-  const _CornerHandle({required this.size});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        shape: BoxShape.circle,
-        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2)],
+  Positioned _buildHandle(
+    double? left,
+    double? top,
+    double size, {
+    double? right,
+    double? bottom,
+  }) {
+    return Positioned(
+      left: left,
+      top: top,
+      right: right,
+      bottom: bottom,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2)],
+        ),
       ),
     );
   }

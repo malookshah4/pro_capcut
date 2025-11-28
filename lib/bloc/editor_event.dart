@@ -186,3 +186,26 @@ class ClipSpeedChanged extends EditorEvent {
   final double speed; // 0.1x to 10.0x
   const ClipSpeedChanged(this.speed);
 }
+
+class ProjectCanvasRatioChanged extends EditorEvent {
+  final double? ratio; // null means "Fit" / "Original"
+  const ProjectCanvasRatioChanged(this.ratio);
+}
+
+class UndoRequested extends EditorEvent {}
+
+class RedoRequested extends EditorEvent {}
+
+class ClipTransitionChanged extends EditorEvent {
+  final String trackId;
+  final String clipId; // The ID of the clip *starting* the transition (Clip B)
+  final String? transitionType; // null = remove
+  final Duration duration;
+
+  const ClipTransitionChanged({
+    required this.trackId,
+    required this.clipId,
+    required this.transitionType,
+    this.duration = const Duration(milliseconds: 500),
+  });
+}

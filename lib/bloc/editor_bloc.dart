@@ -9,7 +9,7 @@ import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:gal/gal.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:hive/hive.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:pro_capcut/domain/models/video_clip.dart';
 import 'package:pro_capcut/presentation/widgets/export_options_sheet.dart';
@@ -35,6 +35,8 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<VideoPositionChanged>(_onVideoPositionChanged);
     on<VideoSeekRequsted>(_onVideoSeekRequested);
     on<ClipTapped>(_onClipTapped);
+
+    // Actions that change project state (Wrapped with History)
     on<ClipAdded>(_onClipAdded);
     on<ClipSplitRequested>(_onClipSplitRequested);
     on<ClipDeleted>(_onClipDeleted);
@@ -48,18 +50,222 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<OverlayTrackAdded>(_onOverlayTrackAdded);
     on<ClipVolumeChanged>(_onClipVolumeChanged);
     on<ClipSpeedChanged>(_onClipSpeedChanged);
+    on<ProjectCanvasRatioChanged>(_onProjectCanvasRatioChanged);
+    on<ClipTransitionChanged>(_onClipTransitionChanged);
+
+    // Undo/Redo
+    on<UndoRequested>(_onUndoRequested);
+    on<RedoRequested>(_onRedoRequested);
+
     on<ExportStarted>(_onExportStarted);
     on<UpdateExportProgress>((event, emit) {
       if (state is EditorLoaded) {
         emit(
           (state as EditorLoaded).copyWith(
             processingProgress: event.progress,
-            // Ensure processingType stays as export so the loading screen doesn't vanish
             processingType: ProcessingType.export,
           ),
         );
       }
     });
+  }
+
+  // Call this BEFORE making changes to state.project
+  void _saveToHistory(Emitter<EditorState> emit) {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+
+    // 1. Create a deep copy of the current project
+    // We simulate deep copy by serializing/deserializing or manual copy
+    // Since our copyWith methods are shallow, we must rely on Project.copyWith
+    // ensuring it creates new Lists for tracks.
+
+    // NOTE: You must ensure Project.copyWith creates NEW List instances,
+    // otherwise modifying the new list modifies the old one.
+    // We will trust the models are immutable enough or we clone the lists here.
+
+    // Simple Clone Strategy for Lists in Project:
+    final deepClonedTracks = currentState.project.tracks.map((t) {
+      // Clone track
+      return EditorTrack(
+        id: t.id,
+        type: t.type,
+        // Clone clips list
+        clips: List.from(t.clips),
+        locked: t.locked,
+        muted: t.muted,
+        visible: t.visible,
+      );
+    }).toList();
+
+    final projectSnapshot = currentState.project.copyWith(
+      tracks: deepClonedTracks,
+    );
+
+    final newUndoStack = List<Project>.from(currentState.undoStack)
+      ..add(projectSnapshot);
+
+    // Limit stack size (e.g. 20 steps)
+    if (newUndoStack.length > 20) {
+      newUndoStack.removeAt(0);
+    }
+
+    emit(
+      currentState.copyWith(
+        undoStack: newUndoStack,
+        redoStack: [], // Clear redo stack on new action
+      ),
+    );
+  }
+
+  void _onUndoRequested(UndoRequested event, Emitter<EditorState> emit) async {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+    if (currentState.undoStack.isEmpty) return;
+
+    final previousProject = currentState.undoStack.last;
+    final newUndoStack = List<Project>.from(currentState.undoStack)
+      ..removeLast();
+
+    // Push CURRENT state to Redo Stack before restoring old one
+    final deepClonedCurrentTracks = currentState.project.tracks.map((t) {
+      return EditorTrack(
+        id: t.id,
+        type: t.type,
+        clips: List.from(t.clips),
+        locked: t.locked,
+        muted: t.muted,
+        visible: t.visible,
+      );
+    }).toList();
+    final currentSnapshot = currentState.project.copyWith(
+      tracks: deepClonedCurrentTracks,
+    );
+
+    final newRedoStack = List<Project>.from(currentState.redoStack)
+      ..add(currentSnapshot);
+
+    // Restore
+    emit(
+      currentState.copyWith(
+        project: previousProject,
+        undoStack: newUndoStack,
+        redoStack: newRedoStack,
+        version: currentState.version + 1,
+      ),
+    );
+
+    // Sync to DB
+    final box = Hive.box<Project>('projects');
+    await box.put(previousProject.id, previousProject);
+  }
+
+  void _onRedoRequested(RedoRequested event, Emitter<EditorState> emit) async {
+    if (state is! EditorLoaded) return;
+    final currentState = state as EditorLoaded;
+    if (currentState.redoStack.isEmpty) return;
+
+    final nextProject = currentState.redoStack.last;
+    final newRedoStack = List<Project>.from(currentState.redoStack)
+      ..removeLast();
+
+    // Push CURRENT state to Undo Stack
+    final deepClonedCurrentTracks = currentState.project.tracks.map((t) {
+      return EditorTrack(
+        id: t.id,
+        type: t.type,
+        clips: List.from(t.clips),
+        locked: t.locked,
+        muted: t.muted,
+        visible: t.visible,
+      );
+    }).toList();
+    final currentSnapshot = currentState.project.copyWith(
+      tracks: deepClonedCurrentTracks,
+    );
+
+    final newUndoStack = List<Project>.from(currentState.undoStack)
+      ..add(currentSnapshot);
+
+    // Restore
+    emit(
+      currentState.copyWith(
+        project: nextProject,
+        undoStack: newUndoStack,
+        redoStack: newRedoStack,
+        version: currentState.version + 1,
+      ),
+    );
+
+    // Sync to DB
+    final box = Hive.box<Project>('projects');
+    await box.put(nextProject.id, nextProject);
+  }
+
+  Future<void> _onClipTransitionChanged(
+    ClipTransitionChanged event,
+    Emitter<EditorState> emit,
+  ) async {
+    if (state is! EditorLoaded) return;
+    _saveToHistory(emit); // Undo support
+
+    final currentState = state as EditorLoaded;
+    final trackIndex = currentState.project.tracks.indexWhere(
+      (t) => t.id == event.trackId,
+    );
+    if (trackIndex == -1) return;
+
+    final track = currentState.project.tracks[trackIndex];
+    final clipIndex = track.clips.indexWhere((c) => c.id == event.clipId);
+    if (clipIndex == -1) return;
+
+    // 1. Update the specific clip
+    final clip = track.clips[clipIndex] as VideoClip;
+    final updatedClip = clip.copyWith(
+      transitionType: event.transitionType,
+      transitionDurationMicroseconds: event.duration.inMicroseconds,
+    );
+    track.clips[clipIndex] = updatedClip;
+
+    // 2. RIPPLE LOGIC: Recalculate timeline positions
+    // Transitions CAUSE OVERLAP.
+    // If Clip B has a 1s transition, it must start 1s BEFORE Clip A ends.
+    if (track.type == TrackType.video) {
+      int currentTimelinePos = 0;
+      for (int i = 0; i < track.clips.length; i++) {
+        final c = track.clips[i] as VideoClip;
+
+        // If this clip has a transition (and isn't the first one), move it BACK by duration
+        int offset = 0;
+        if (i > 0 && c.transitionType != null) {
+          offset = c.transitionDurationMicroseconds;
+        }
+
+        // The start time is CurrentPos - Offset
+        // Ensure we don't go below 0
+        int newStart = currentTimelinePos - offset;
+        if (newStart < 0) newStart = 0;
+
+        if (c.startTimeInTimelineInMicroseconds != newStart) {
+          track.clips[i] = c.copyWith(
+            startTimeInTimelineInMicroseconds: newStart,
+          );
+        }
+
+        // Advance CurrentPos by the clip's visual duration
+        // Visual Duration = Full Duration.
+        // (The overlap logic is handled by the *start* time of the *next* clip)
+        currentTimelinePos = newStart + c.durationInMicroseconds;
+      }
+    }
+
+    await currentState.project.save();
+    emit(
+      currentState.copyWith(
+        project: currentState.project,
+        version: currentState.version + 1,
+      ),
+    );
   }
 
   Future<void> _onExportStarted(
@@ -190,7 +396,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
       builder.addAudioTracks(audioClips);
 
       // --- D. Execution ---
-      final dir = await getTemporaryDirectory();
+      final dir = Directory("/storage/emulated/0/Movies");
       final outputPath =
           "${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4";
 
@@ -246,7 +452,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
             final outputFile = File(outputPath);
             if (await outputFile.exists()) {
               await Gal.putVideo(outputPath);
-              print("Video successfully saved to gallery");
+              print("Video successfully saved to gallery" + outputPath);
               Fluttertoast.showToast(msg: "Video saved to Gallery! 📸");
             }
           } else {
@@ -295,11 +501,13 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     Emitter<EditorState> emit,
   ) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
 
     if (currentState.selectedTrackId == null ||
-        currentState.selectedClipId == null)
+        currentState.selectedClipId == null) {
       return;
+    }
 
     final track = currentState.project.tracks.firstWhere(
       (t) => t.id == currentState.selectedTrackId,
@@ -334,11 +542,13 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     Emitter<EditorState> emit,
   ) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
 
     if (currentState.selectedTrackId == null ||
-        currentState.selectedClipId == null)
+        currentState.selectedClipId == null) {
       return;
+    }
 
     final track = currentState.project.tracks.firstWhere(
       (t) => t.id == currentState.selectedTrackId,
@@ -639,6 +849,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     Emitter<EditorState> emit,
   ) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
     final track = currentState.project.tracks.firstWhere(
       (t) => t.id == event.trackId,
@@ -664,6 +875,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     Emitter<EditorState> emit,
   ) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
     final trackIndex = currentState.project.tracks.indexWhere(
       (t) => t.id == event.trackId,
@@ -710,18 +922,30 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     final currentState = state as EditorLoaded;
     final project = currentState.project;
     final videoTrack = currentState.videoTrack;
-    if (videoTrack.clips.isNotEmpty) {
+
+    // OPTIMIZATION: Only generate thumbnail if one doesn't exist
+    if (project.thumbnailPath == null && videoTrack.clips.isNotEmpty) {
       final firstClip = videoTrack.clips.first as VideoClip;
-      if (project.thumbnailPath == null) {
-        await ThumbnailUtils.deleteThumbnail(project.thumbnailPath);
+      try {
+        // No need to deleteThumbnail if it is null
         project.thumbnailPath = await ThumbnailUtils.generateAndSaveThumbnail(
           firstClip.sourcePath,
           project.id,
         );
+      } catch (e) {
+        print("Error generating thumbnail on save: $e");
       }
     }
+
+    // Update timestamp
     project.lastModified = DateTime.now();
+
+    // CRITICAL: This calls Project.toJson(), which calls Track.toJson(),
+    // which calls VideoClip.toJson().
+    // If VideoClip.toJson() is missing the 'x/y/scale' fields, this save is incomplete.
     await project.save();
+
+    // Emit the state to ensure UI reflects the saved status/thumbnail
     emit(currentState.copyWith(project: project));
   }
 
@@ -730,6 +954,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     Emitter<EditorState> emit,
   ) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
     EditorTrack? trackToSplit;
     TimelineClip? clipToSplit;
@@ -822,12 +1047,14 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         project: currentState.project,
         clearSelectedClipId: true,
         clearSelectedTrackId: true,
+        version: currentState.version + 1,
       ),
     );
   }
 
   Future<void> _onClipAdded(ClipAdded event, Emitter<EditorState> emit) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
     emit(currentState.copyWith(processingType: ProcessingType.export));
     try {
@@ -872,6 +1099,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     Emitter<EditorState> emit,
   ) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
     emit(currentState.copyWith(processingType: ProcessingType.export));
     try {
@@ -912,6 +1140,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     Emitter<EditorState> emit,
   ) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
     final newClip = TextClip(
       id: const Uuid().v4(),
@@ -936,6 +1165,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     Emitter<EditorState> emit,
   ) async {
     if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
     final currentState = state as EditorLoaded;
     emit(currentState.copyWith(processingType: ProcessingType.export));
     try {
@@ -977,5 +1207,33 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     } catch (e) {
       emit(currentState.copyWith(clearProcessing: true));
     }
+  }
+
+  Future<void> _onProjectCanvasRatioChanged(
+    ProjectCanvasRatioChanged event,
+    Emitter<EditorState> emit,
+  ) async {
+    if (state is! EditorLoaded) return;
+    _saveToHistory(emit);
+    final currentState = state as EditorLoaded;
+
+    // MANUAL COPY to support setting null
+    final updatedProject = Project(
+      id: currentState.project.id,
+      lastModified: currentState.project.lastModified,
+      tracks: currentState.project.tracks,
+      thumbnailPath: currentState.project.thumbnailPath,
+      canvasAspectRatio: event.ratio, // DIRECT ASSIGNMENT
+    );
+
+    final box = Hive.box<Project>('projects');
+    await box.put(updatedProject.id, updatedProject);
+
+    emit(
+      currentState.copyWith(
+        project: updatedProject,
+        version: currentState.version + 1,
+      ),
+    );
   }
 }
